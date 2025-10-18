@@ -1196,9 +1196,47 @@ def create_clickup_tasks_via_mcp(action_items, destination, meeting_title, claud
 
         full_description = "\n".join(description_parts)
 
+        # Condense task name: remove assignee name and extra words
+        condensed_name = item['task']
+
+        # Remove assignee name from beginning (e.g., "Matt Rose will" -> "will")
+        if item.get('assignee'):
+            assignee_pattern = rf"^{re.escape(item['assignee'])}\s+(will|should|needs to|to|must|can)\s+"
+            condensed_name = re.sub(assignee_pattern, '', condensed_name, flags=re.IGNORECASE)
+
+        # Remove common prefixes
+        condensed_name = re.sub(r'^(will|should|needs to|need to|must|can)\s+', '', condensed_name, flags=re.IGNORECASE)
+
+        # Capitalize first letter
+        if condensed_name:
+            condensed_name = condensed_name[0].upper() + condensed_name[1:]
+
+        # Intelligently truncate if too long (at word/phrase boundaries)
+        if len(condensed_name) > 80:
+            # Try to break at natural boundaries (by/after/for/with/at/before)
+            truncate_at = 80
+            boundaries = [' by ', ' after ', ' for ', ' with ', ' at ', ' before ', ' and ', ' to ']
+
+            # Find the last boundary before position 80
+            best_pos = -1
+            for boundary in boundaries:
+                pos = condensed_name[:80].rfind(boundary)
+                if pos > best_pos and pos > 40:  # Don't truncate too early
+                    best_pos = pos
+
+            if best_pos > 40:
+                condensed_name = condensed_name[:best_pos]
+            else:
+                # No good boundary found, just truncate at last space before 80
+                last_space = condensed_name[:80].rfind(' ')
+                if last_space > 40:
+                    condensed_name = condensed_name[:last_space]
+                else:
+                    condensed_name = condensed_name[:80]
+
         # Build task object for ClickUp MCP
         task_obj = {
-            'name': item['task'],
+            'name': condensed_name,
             'markdown_description': full_description,
             'tags': meeting_tags
         }
