@@ -1,0 +1,23 @@
+# Sensitive files - DO NOT COMMIT
+.env
+token.json
+credentials.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# IDEs
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.tmp
+*.log
