@@ -767,10 +767,18 @@ def parse_action_items(notes_content, meeting_title="", debug=False):
                     elif any(word in task_text.lower() for word in ['important', 'priority', 'high']):
                         priority = 'high'
 
+                    # Find relevant context from Details section
+                    context = find_relevant_context(task_text, details_section, assignee)
+
+                    # Extract due date from task text and context (using meeting date as reference)
+                    due_date_info = extract_due_date(task_text, context, meeting_date)
+
                     action_items.append({
                         'task': task_text,
                         'assignee': assignee,
-                        'priority': priority
+                        'priority': priority,
+                        'context': context,
+                        'due_date': due_date_info
                     })
 
     # Remove duplicates
