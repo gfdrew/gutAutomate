@@ -718,7 +718,15 @@ def parse_action_items(notes_content, meeting_title="", debug=False):
                 # No valid assignees found (only ignored people mentioned or no one)
                 assignee = None
 
+            # Clean up task text: remove checkboxes, bullet points, etc.
             task_text = line
+            # Remove checkbox symbols (☐ ☑ ✓ ✗ ☒ □ ■)
+            task_text = re.sub(r'^[☐☑✓✗☒□■]\s*', '', task_text)
+            # Remove bullet points (-, •, *, etc.)
+            task_text = re.sub(r'^[-•*]\s+', '', task_text)
+            # Remove numbered list markers (1., 2., etc.)
+            task_text = re.sub(r'^\d+\.\s+', '', task_text)
+            task_text = task_text.strip()
 
             # Estimate priority based on keywords
             priority = None
@@ -754,6 +762,13 @@ def parse_action_items(notes_content, meeting_title="", debug=False):
             matches = re.finditer(pattern, notes_content, re.IGNORECASE)
             for match in matches:
                 task_text = match.group(1).strip()
+
+                # Clean up task text: remove checkboxes, bullet points, etc.
+                task_text = re.sub(r'^[☐☑✓✗☒□■]\s*', '', task_text)
+                task_text = re.sub(r'^[-•*]\s+', '', task_text)
+                task_text = re.sub(r'^\d+\.\s+', '', task_text)
+                task_text = task_text.strip()
+
                 # Skip very short items or headers
                 if len(task_text) > 10 and not task_text.endswith(':'):
                     # Try to find assignee mentions
