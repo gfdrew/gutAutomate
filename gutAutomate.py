@@ -1142,6 +1142,50 @@ def get_clickup_api_token():
     return token if token else None
 
 
+# Cache for email to user ID mapping (to avoid repeated API calls)
+_email_to_id_cache = {}
+
+def resolve_email_to_clickup_id(email, api_token, workspace_id='2538614'):
+    """
+    Convert email address to ClickUp user ID by looking up workspace members.
+    Caches results to avoid repeated API calls.
+
+    Args:
+        email: Email address to resolve
+        api_token: ClickUp API token
+        workspace_id: ClickUp workspace/team ID
+
+    Returns:
+        int: ClickUp user ID or None if not found
+    """
+    # Check cache first
+    if email in _email_to_id_cache:
+        return _email_to_id_cache[email]
+
+    # Fetch workspace members if not cached
+    if not _email_to_id_cache:
+        try:
+            url = f"https://api.clickup.com/api/v2/team/{workspace_id}/user"
+            headers = {'Authorization': api_token}
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()
+
+            members = response.json().get('members', [])
+            for member in members:
+                user = member.get('user', {})
+                user_email = user.get('email', '')
+                user_id = user.get('id')
+                if user_email and user_id:
+                    _email_to_id_cache[user_email.lower()] = user_id
+
+        except Exception as e:
+            print(f"Warning: Could not fetch workspace members: {e}")
+            return None
+
+    # Look up in cache
+    return _email_to_id_cache.get(email.lower())
+
+
 def create_clickup_task_via_api(task_data, api_token):
     """
     Create a single task in ClickUp using the REST API.
@@ -1172,7 +1216,15 @@ def create_clickup_task_via_api(task_data, api_token):
 
     # Add optional fields
     if task_data.get('assignees'):
-        payload['assignees'] = task_data['assignees']
+        # Convert email addresses to ClickUp user IDs for REST API
+        assignee_ids = []
+        for email in task_data['assignees']:
+            user_id = resolve_email_to_clickup_id(email, api_token)
+            if user_id:
+                assignee_ids.append(user_id)
+
+        if assignee_ids:
+            payload['assignees'] = assignee_ids
     if task_data.get('priority'):
         # Convert priority names to ClickUp values
         priority_map = {'urgent': 1, 'high': 2, 'normal': 3, 'low': 4}
