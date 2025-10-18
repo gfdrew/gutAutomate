@@ -635,8 +635,9 @@ def resolve_assignee_email(name):
         if name_lower in map_name or map_name in name_lower:
             return email
 
-    # If no match found, return the original name (ClickUp will try to resolve it)
-    return name
+    # If no match found, return None (person not in assignee map)
+    # Task will be assigned to DEFAULT_ASSIGNEE instead
+    return None
 
 
 def parse_action_items(notes_content, meeting_title="", debug=False):
@@ -1207,15 +1208,30 @@ def create_clickup_tasks_via_mcp(action_items, destination, meeting_title, claud
     for i, item in enumerate(action_items, 1):
         print(f"\nPreparing Task {i}/{len(action_items)}: {item['task'][:50]}...")
 
+        # Check if assignee is in our map
+        mentioned_assignee = item.get('assignee')
+        resolved_email = None
+        if mentioned_assignee:
+            resolved_email = resolve_assignee_email(mentioned_assignee)
+
         # Build the task description with markdown formatting
         description_parts = [
             f"**Action Item:** {item['task']}",
-            "",
+            ""
+        ]
+
+        # If assignee mentioned but not in map, add them to description
+        if mentioned_assignee and not resolved_email:
+            # Person not in assignee map, mention them in description
+            description_parts.append(f"**Mentioned Assignee:** {mentioned_assignee}")
+            description_parts.append("")
+
+        description_parts.extend([
             "**Context from Meeting:**",
             item.get('context', 'No additional context available'),
             "",
             f"**Source:** {meeting_title}"
-        ]
+        ])
 
         full_description = "\n".join(description_parts)
 
@@ -1264,14 +1280,9 @@ def create_clickup_tasks_via_mcp(action_items, destination, meeting_title, claud
             'tags': meeting_tags
         }
 
-        # Resolve assignee: try parsed name first, fall back to default
-        assignee_email = None
-        if item.get('assignee'):
-            # Resolve the name to email using the mapping
-            assignee_email = resolve_assignee_email(item['assignee'])
-        else:
-            # No assignee mentioned, use default from .env
-            assignee_email = os.getenv('DEFAULT_ASSIGNEE')
+        # Use resolved email from earlier, or fall back to default
+        # (resolved_email was set when building description)
+        assignee_email = resolved_email if resolved_email else os.getenv('DEFAULT_ASSIGNEE')
 
         if assignee_email:
             task_obj['assignees'] = [assignee_email]
