@@ -709,15 +709,22 @@ def parse_action_items(notes_content, meeting_title="", debug=False):
             ignored_names = get_ignored_assignees()
 
             # Filter out ignored names (e.g., Ryan Joseph)
-            assignees = [name for name in all_names if name.lower() not in ignored_names]
+            non_ignored_names = [name for name in all_names if name.lower() not in ignored_names]
 
-            # Determine the assignee
-            if len(assignees) >= 1:
-                # Assign to first non-ignored person
-                assignee = assignees[0]
-            else:
-                # No valid assignees found (only ignored people mentioned or no one)
-                assignee = None
+            # Determine the assignee: prioritize people in ASSIGNEE_MAP
+            assignee = None
+            if non_ignored_names:
+                # Try to find someone in the ASSIGNEE_MAP first
+                for name in non_ignored_names:
+                    if resolve_assignee_email(name):
+                        # This person is in the map, assign to them
+                        assignee = name
+                        break
+
+                # If no one in the map was found, use first non-ignored person
+                # (they'll be marked as "Mentioned Assignee" later)
+                if not assignee:
+                    assignee = non_ignored_names[0]
 
             # Clean up task text: remove checkboxes, bullet points, etc.
             task_text = line
@@ -772,9 +779,24 @@ def parse_action_items(notes_content, meeting_title="", debug=False):
 
                 # Skip very short items or headers
                 if len(task_text) > 10 and not task_text.endswith(':'):
-                    # Try to find assignee mentions
-                    assignee_match = re.search(r'@(\w+)|(\w+)\s+(?:will|should)', task_text)
-                    assignee = assignee_match.group(1) or assignee_match.group(2) if assignee_match else None
+                    # Extract all names mentioned
+                    full_names = re.findall(r'\b([A-Z][a-z]+(?: [A-Z][a-z]+)+)\b', task_text)
+                    single_names = re.findall(r'\b(drew|art|matt|kato|paula)\b', task_text, re.IGNORECASE)
+                    all_names = full_names + single_names
+
+                    # Filter out ignored names
+                    ignored_names = get_ignored_assignees()
+                    non_ignored_names = [name for name in all_names if name.lower() not in ignored_names]
+
+                    # Prioritize people in ASSIGNEE_MAP
+                    assignee = None
+                    if non_ignored_names:
+                        for name in non_ignored_names:
+                            if resolve_assignee_email(name):
+                                assignee = name
+                                break
+                        if not assignee:
+                            assignee = non_ignored_names[0]
 
                     # Estimate priority based on keywords
                     priority = None
