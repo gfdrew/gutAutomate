@@ -857,6 +857,18 @@ def smart_destination_detection(meeting_title):
             'list_name': 'Holiday CTV 2025',
             'list_id': '901112154120'
         },
+        'gopuff': {
+            'space_name': 'Clients',
+            'folder_name': 'Gopuff',
+            'list_name': 'NYE',
+            'list_id': '901106184953'
+        },
+        'nye': {
+            'space_name': 'Clients',
+            'folder_name': 'Gopuff',
+            'list_name': 'NYE',
+            'list_id': '901106184953'
+        },
         # Add more mappings as needed
     }
 
@@ -1024,10 +1036,19 @@ def preview_clickup_tasks(action_items, meeting_title, destination=None, claude_
             print(f"  {line}")
         print("  " + "-" * 58)
 
-        if item.get('assignee'):
-            print(f"\n  Assignee: {item['assignee']}")
+        # Show who will actually be assigned (resolve through ASSIGNEE_MAP)
+        mentioned_assignee = item.get('assignee')
+        if mentioned_assignee:
+            resolved_email = resolve_assignee_email(mentioned_assignee)
+            if resolved_email:
+                print(f"\n  Assignee: {mentioned_assignee} ({resolved_email})")
+            else:
+                # Not in map, will use default
+                default_email = os.getenv('DEFAULT_ASSIGNEE', 'unassigned')
+                print(f"\n  Assignee: {default_email} (default, {mentioned_assignee} not in team map)")
         else:
-            print(f"\n  Assignee: (unassigned)")
+            default_email = os.getenv('DEFAULT_ASSIGNEE', 'unassigned')
+            print(f"\n  Assignee: {default_email} (default)")
         print(f"  Priority: {item.get('priority', 'normal')}")
 
         # Show due date if found
