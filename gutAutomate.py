@@ -860,13 +860,13 @@ def smart_destination_detection(meeting_title):
         'gopuff': {
             'space_name': 'Clients',
             'folder_name': 'Gopuff',
-            'list_name': 'NYE',
+            'list_name': 'NYE RR + WK',
             'list_id': '901106184953'
         },
         'nye': {
             'space_name': 'Clients',
             'folder_name': 'Gopuff',
-            'list_name': 'NYE',
+            'list_name': 'NYE RR + WK',
             'list_id': '901106184953'
         },
         # Add more mappings as needed
