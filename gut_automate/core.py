@@ -1800,7 +1800,6 @@ def prompt_for_meeting_approval(emails, claude_mode=False):
     print("  • Enter numbers (comma-separated, e.g., '1,2' or '2')")
 
     # Check for MEETING_SELECTION environment variable (works in both modes)
-    import os
     selection = os.environ.get('MEETING_SELECTION', '')
 
     if selection:
