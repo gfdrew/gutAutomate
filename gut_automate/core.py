@@ -47,6 +47,81 @@ def get_user_input(prompt, default='y'):
         return default
     return input(prompt).strip()
 
+
+def prompt_duplicate_action(new_task, existing_task, similarity, changes):
+    """
+    Prompt user for action when duplicate task is found.
+
+    Args:
+        new_task: The new task dict
+        existing_task: The existing task from ClickUp
+        similarity: Similarity score (0.0 to 1.0)
+        changes: Dict from compare_tasks()
+
+    Returns:
+        str: 'skip', 'update', or 'create'
+    """
+    from gut_automate.duplicate_detection import format_changes_summary, get_task_url
+
+    print("\n" + "="*70)
+    print("⚠️  POTENTIAL DUPLICATE DETECTED")
+    print("="*70)
+
+    print(f"\n📋 Existing Task ({int(similarity*100)}% match):")
+    print(f"   Name: {existing_task.get('name', 'Unknown')}")
+    print(f"   ID: {existing_task.get('id')}")
+    print(f"   URL: {get_task_url(existing_task.get('id'))}")
+    print(f"   Status: {existing_task.get('status', {}).get('status', 'Unknown')}")
+
+    assignees = existing_task.get('assignees', [])
+    if assignees:
+        assignee_names = [a.get('username', 'Unknown') for a in assignees]
+        print(f"   Assignees: {', '.join(assignee_names)}")
+
+    due_date = existing_task.get('due_date')
+    if due_date:
+        print(f"   Due Date: {due_date}")
+
+    print(f"\n🆕 New Task:")
+    print(f"   Name: {new_task.get('name', 'Unknown')}")
+
+    new_assignees = new_task.get('assignees', [])
+    if new_assignees:
+        print(f"   Assignees: {', '.join(new_assignees)}")
+
+    new_due = new_task.get('due_date')
+    if new_due:
+        print(f"   Due Date: {new_due}")
+
+    # Show changes if any
+    if changes.get('has_changes'):
+        print(f"\n📝 Detected Changes:")
+        print(f"   {format_changes_summary(changes)}")
+
+    print("\n" + "="*70)
+    print("What would you like to do?")
+    print("  1) Skip - Don't create (task already exists)")
+    print("  2) Update - Update existing task with new information")
+    print("  3) Create - Create new task anyway (ignore duplicate)")
+    print("="*70)
+
+    if BATCH_MODE:
+        print("[BATCH MODE: auto-selecting 'skip']")
+        return 'skip'
+
+    choice = input("\nYour choice (1/2/3): ").strip()
+
+    if choice == '1':
+        return 'skip'
+    elif choice == '2':
+        return 'update'
+    elif choice == '3':
+        return 'create'
+    else:
+        print("Invalid choice. Defaulting to 'skip'.")
+        return 'skip'
+
+
 # If modifying these scopes, delete the file token.json.
 SCOPES = [
     'https://www.googleapis.com/auth/drive',  # Full Drive access for copying files
@@ -1311,6 +1386,136 @@ def resolve_email_to_clickup_id(email, api_token, workspace_id='2538614'):
     return _email_to_id_cache.get(email.lower())
 
 
+def get_tasks_from_list(list_id, api_token):
+    """
+    Fetch all existing tasks from a ClickUp list.
+
+    Args:
+        list_id: ClickUp list ID
+        api_token: ClickUp API token
+
+    Returns:
+        List of task dictionaries or empty list if failed
+    """
+    url = f"https://api.clickup.com/api/v2/list/{list_id}/task"
+
+    headers = {
+        'Authorization': api_token,
+        'Content-Type': 'application/json'
+    }
+
+    params = {
+        'include_closed': False,  # Don't include closed tasks
+        'subtasks': False  # Don't include subtasks
+    }
+
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            return data.get('tasks', [])
+        else:
+            print(f"⚠️  Failed to fetch tasks from list: {response.status_code}")
+            return []
+    except Exception as e:
+        print(f"⚠️  Error fetching tasks: {e}")
+        return []
+
+
+def update_clickup_task(task_id, updates, api_token):
+    """
+    Update an existing ClickUp task.
+
+    Args:
+        task_id: ClickUp task ID
+        updates: Dict with fields to update (name, description, due_date, assignees, etc.)
+        api_token: ClickUp API token
+
+    Returns:
+        dict: API response or None if failed
+    """
+    url = f"https://api.clickup.com/api/v2/task/{task_id}"
+
+    headers = {
+        'Authorization': api_token,
+        'Content-Type': 'application/json'
+    }
+
+    payload = {}
+
+    # Add fields to update
+    if 'name' in updates:
+        payload['name'] = updates['name']
+
+    if 'markdown_description' in updates:
+        payload['markdown_description'] = updates['markdown_description']
+
+    if 'due_date' in updates:
+        payload['due_date'] = updates['due_date']
+
+    if 'assignees' in updates:
+        # Handle assignees
+        assignee_ids = []
+        for assignee in updates['assignees']:
+            if isinstance(assignee, dict):
+                assignee_ids.append(assignee.get('id'))
+            else:
+                # It's an email, resolve it
+                user_id = resolve_email_to_clickup_id(assignee, api_token)
+                if user_id:
+                    assignee_ids.append(user_id)
+
+        if assignee_ids:
+            payload['assignees'] = {'add': assignee_ids}
+
+    try:
+        response = requests.put(url, headers=headers, json=payload)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"⚠️  Failed to update task: {response.status_code}")
+            print(f"    Response: {response.text}")
+            return None
+    except Exception as e:
+        print(f"⚠️  Error updating task: {e}")
+        return None
+
+
+def add_task_comment(task_id, comment_text, api_token):
+    """
+    Add a comment to a ClickUp task.
+
+    Args:
+        task_id: ClickUp task ID
+        comment_text: Comment text (supports markdown)
+        api_token: ClickUp API token
+
+    Returns:
+        dict: API response or None if failed
+    """
+    url = f"https://api.clickup.com/api/v2/task/{task_id}/comment"
+
+    headers = {
+        'Authorization': api_token,
+        'Content-Type': 'application/json'
+    }
+
+    payload = {
+        'comment_text': comment_text
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"⚠️  Failed to add comment: {response.status_code}")
+            return None
+    except Exception as e:
+        print(f"⚠️  Error adding comment: {e}")
+        return None
+
+
 def create_clickup_task_via_api(task_data, api_token):
     """
     Create a single task in ClickUp using the REST API.
@@ -1806,8 +2011,21 @@ def main(mode='standalone'):
                                     print(f"  2. Run: export CLICKUP_API_TOKEN='your_token'")
                                     print(f"  3. Re-run this script")
                                 else:
-                                    # Create tasks via API
+                                    # Import duplicate detection functions
+                                    from gut_automate.duplicate_detection import (
+                                        find_similar_tasks, compare_tasks,
+                                        merge_descriptions, create_update_comment
+                                    )
+
+                                    # Fetch existing tasks from destination list for duplicate detection
+                                    print(f"\n🔍 Checking for duplicate tasks in destination list...")
+                                    existing_tasks = get_tasks_from_list(destination['list_id'], api_token)
+                                    print(f"   Found {len(existing_tasks)} existing tasks")
+
+                                    # Create tasks via API with duplicate detection
                                     created_count = 0
+                                    updated_count = 0
+                                    skipped_count = 0
                                     failed_count = 0
                                     task_urls = []
 
@@ -1815,8 +2033,76 @@ def main(mode='standalone'):
                                         # Add list_id to task_data
                                         task_data['list_id'] = destination['list_id']
 
-                                        print(f"Creating: {task_data['name'][:50]}...", end=" ")
+                                        print(f"\n📝 Processing: {task_data['name'][:60]}...")
 
+                                        # Check for duplicates
+                                        matches = find_similar_tasks(task_data, existing_tasks, threshold=0.85)
+
+                                        if matches:
+                                            # Found potential duplicate
+                                            existing_task, similarity = matches[0]
+
+                                            # Compare to see what changed
+                                            changes = compare_tasks(task_data, existing_task)
+
+                                            # Prompt user for action
+                                            action = prompt_duplicate_action(
+                                                task_data, existing_task, similarity, changes
+                                            )
+
+                                            if action == 'skip':
+                                                print("   ⏭️  Skipped (duplicate)")
+                                                skipped_count += 1
+                                                continue
+
+                                            elif action == 'update':
+                                                print("   🔄 Updating existing task...", end=" ")
+
+                                                # Prepare updates
+                                                updates = {}
+
+                                                # Update due date if changed
+                                                if changes.get('due_date_changed'):
+                                                    updates['due_date'] = changes['new_due_date']
+
+                                                # Update assignees if changed
+                                                if changes.get('assignee_changed'):
+                                                    updates['assignees'] = task_data.get('assignees', [])
+
+                                                # Merge descriptions if different
+                                                if changes.get('description_different'):
+                                                    merged_desc = merge_descriptions(
+                                                        changes['old_description'],
+                                                        changes['new_description']
+                                                    )
+                                                    updates['markdown_description'] = merged_desc
+
+                                                # Update the task
+                                                if updates:
+                                                    update_response = update_clickup_task(
+                                                        existing_task['id'], updates, api_token
+                                                    )
+
+                                                    if update_response:
+                                                        # Add comment explaining the update
+                                                        comment_text = create_update_comment(meeting_title, changes)
+                                                        add_task_comment(existing_task['id'], comment_text, api_token)
+
+                                                        updated_count += 1
+                                                        task_url = existing_task.get('url', '')
+                                                        task_urls.append(task_url)
+                                                        print("✓")
+                                                    else:
+                                                        failed_count += 1
+                                                        print("✗")
+                                                else:
+                                                    print("(no changes needed)")
+                                                    skipped_count += 1
+
+                                                continue
+
+                                        # No duplicate or user chose to create anyway
+                                        print("   ➕ Creating new task...", end=" ")
                                         response = create_clickup_task_via_api(task_data, api_token)
 
                                         if response:
@@ -1839,14 +2125,18 @@ def main(mode='standalone'):
 
                                     # Summary
                                     print(f"\n{'='*60}")
-                                    print(f"TASK CREATION COMPLETE")
+                                    print(f"TASK PROCESSING COMPLETE")
                                     print(f"{'='*60}")
-                                    print(f"✓ Created: {created_count}")
+                                    print(f"➕ Created: {created_count}")
+                                    if updated_count > 0:
+                                        print(f"🔄 Updated: {updated_count}")
+                                    if skipped_count > 0:
+                                        print(f"⏭️  Skipped: {skipped_count}")
                                     if failed_count > 0:
                                         print(f"✗ Failed: {failed_count}")
 
                                     if task_urls:
-                                        print(f"\nCreated tasks:")
+                                        print(f"\nProcessed tasks:")
                                         for url in task_urls[:5]:  # Show first 5
                                             if url:
                                                 print(f"  {url}")
