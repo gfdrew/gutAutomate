@@ -1680,11 +1680,28 @@ def create_clickup_tasks_via_mcp(action_items, destination, meeting_title, claud
                 else:
                     condensed_name = condensed_name[:80]
 
+        # Detect per-task destination (overrides meeting-level destination)
+        from gut_automate.task_learning import detect_task_destination
+        task_destination_result = detect_task_destination(
+            task_text=item['task'],
+            task_context=item.get('context', ''),
+            meeting_context=meeting_title
+        )
+
+        # Use detected destination if confidence is high enough
+        task_list_id = destination['list_id']  # Default to meeting destination
+        if task_destination_result:
+            task_dest, confidence, source = task_destination_result
+            if confidence >= 0.7:  # Only override if confident
+                task_list_id = task_dest.get('list_id', destination['list_id'])
+                print(f"    → Detected specific destination: {task_dest.get('list_name', 'unknown')} (confidence: {confidence:.0%}, source: {source})")
+
         # Build task object for ClickUp MCP
         task_obj = {
             'name': condensed_name,
             'markdown_description': full_description,
-            'tags': meeting_tags
+            'tags': meeting_tags,
+            'list_id': task_list_id  # Store per-task list_id
         }
 
         # Use resolved email from earlier, or fall back to default
@@ -1998,8 +2015,9 @@ def main(mode='auto'):
                                 task_urls = []
 
                                 for task_data in result['prepared_tasks']:
-                                    # Add list_id to task_data
-                                    task_data['list_id'] = destination['list_id']
+                                    # Use per-task list_id if available, otherwise use meeting destination
+                                    if 'list_id' not in task_data:
+                                        task_data['list_id'] = destination['list_id']
 
                                     print(f"\n📝 Processing: {task_data['name'][:60]}...")
 
