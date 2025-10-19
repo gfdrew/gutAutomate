@@ -1799,17 +1799,21 @@ def prompt_for_meeting_approval(emails, claude_mode=False):
     print("  • Enter 'none' or 'skip' to skip all")
     print("  • Enter numbers (comma-separated, e.g., '1,2' or '2')")
 
-    if claude_mode:
-        # In claude mode, expect MEETING_SELECTION environment variable
-        import os
-        selection = os.environ.get('MEETING_SELECTION', '')
-        if not selection:
-            print("\n🤖 CLAUDE MODE: No MEETING_SELECTION environment variable found.")
-            print("   Expected format: 'all' or '1,2' or '2'")
-            return []
-        print(f"\n🤖 CLAUDE MODE: Using MEETING_SELECTION={selection}")
+    # Check for MEETING_SELECTION environment variable (works in both modes)
+    import os
+    selection = os.environ.get('MEETING_SELECTION', '')
+
+    if selection:
+        # Using environment variable
+        print(f"\n✓ Using MEETING_SELECTION={selection}")
         response = selection.strip().lower()
+    elif claude_mode:
+        # Claude mode but no environment variable
+        print("\n🤖 CLAUDE MODE: No MEETING_SELECTION environment variable found.")
+        print("   Expected format: 'all' or '1,2' or '2'")
+        return []
     else:
+        # Interactive mode
         response = get_user_input("\nYour choice: ", 'all').lower()
 
     # Handle 'all' or 'y'
