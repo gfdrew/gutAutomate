@@ -728,11 +728,12 @@ def parse_action_items(notes_content, meeting_title="", debug=False):
 
             # Clean up task text: remove checkboxes, bullet points, etc.
             task_text = line
-            # Remove checkbox symbols (☐ ☑ ✓ ✗ ☒ □ ■)
-            task_text = re.sub(r'^[☐☑✓✗☒□■]\s*', '', task_text)
-            # Remove bullet points (-, •, *, etc.)
+            # Remove checkbox symbols - handle both start and mid-text positions
+            # Common checkbox characters: ☐ ☑ ✓ ✗ ☒ □ ■ ✔ ❏ ❐ ⬜ ▪ ▫
+            task_text = re.sub(r'[☐☑✓✗☒□■✔❏❐⬜▪▫]\s*', '', task_text)
+            # Remove bullet points (-, •, *, etc.) at start
             task_text = re.sub(r'^[-•*]\s+', '', task_text)
-            # Remove numbered list markers (1., 2., etc.)
+            # Remove numbered list markers (1., 2., etc.) at start
             task_text = re.sub(r'^\d+\.\s+', '', task_text)
             task_text = task_text.strip()
 
@@ -1286,7 +1287,7 @@ def get_clickup_api_token():
 # Cache for email to user ID mapping (to avoid repeated API calls)
 _email_to_id_cache = {}
 
-def resolve_email_to_clickup_id(email, api_token, workspace_id='2538614'):
+def resolve_email_to_clickup_id(email, api_token, workspace_id='2538614', debug=False):
     """
     Convert email address to ClickUp user ID by looking up workspace members.
     Caches results to avoid repeated API calls.
@@ -1295,16 +1296,24 @@ def resolve_email_to_clickup_id(email, api_token, workspace_id='2538614'):
         email: Email address to resolve
         api_token: ClickUp API token
         workspace_id: ClickUp workspace/team ID
+        debug: Enable debug logging
 
     Returns:
         int: ClickUp user ID or None if not found
     """
+    if debug:
+        print(f"  [DEBUG] Resolving email: {email}")
+
     # Check cache first
     if email in _email_to_id_cache:
+        if debug:
+            print(f"  [DEBUG] Found in cache: {_email_to_id_cache[email]}")
         return _email_to_id_cache[email]
 
     # Fetch workspace members if not cached
     if not _email_to_id_cache:
+        if debug:
+            print(f"  [DEBUG] Cache empty, fetching workspace members...")
         try:
             url = f"https://api.clickup.com/api/v2/team/{workspace_id}/user"
             headers = {'Authorization': api_token}
@@ -1312,19 +1321,30 @@ def resolve_email_to_clickup_id(email, api_token, workspace_id='2538614'):
             response.raise_for_status()
 
             members = response.json().get('members', [])
+            if debug:
+                print(f"  [DEBUG] Found {len(members)} members in workspace")
             for member in members:
                 user = member.get('user', {})
                 user_email = user.get('email', '')
                 user_id = user.get('id')
                 if user_email and user_id:
                     _email_to_id_cache[user_email.lower()] = user_id
+                    if debug:
+                        print(f"  [DEBUG] Cached: {user_email} -> {user_id}")
 
         except Exception as e:
             print(f"Warning: Could not fetch workspace members: {e}")
             return None
 
     # Look up in cache
-    return _email_to_id_cache.get(email.lower())
+    result = _email_to_id_cache.get(email.lower())
+    if debug:
+        if result:
+            print(f"  [DEBUG] Resolved {email} -> {result}")
+        else:
+            print(f"  [DEBUG] Email not found in cache: {email}")
+            print(f"  [DEBUG] Available emails: {list(_email_to_id_cache.keys())[:5]}...")
+    return result
 
 
 def create_clickup_task_via_api(task_data, api_token):
@@ -1359,13 +1379,21 @@ def create_clickup_task_via_api(task_data, api_token):
     if task_data.get('assignees'):
         # Convert email addresses to ClickUp user IDs for REST API
         assignee_ids = []
+        # Enable debug for first email only to diagnose issues
+        first = True
         for email in task_data['assignees']:
-            user_id = resolve_email_to_clickup_id(email, api_token)
+            user_id = resolve_email_to_clickup_id(email, api_token, debug=first)
+            first = False
             if user_id:
                 assignee_ids.append(user_id)
+            else:
+                print(f"  ⚠️  Could not resolve email to user ID: {email}")
 
         if assignee_ids:
             payload['assignees'] = assignee_ids
+            print(f"  ✓ Assignees: {assignee_ids}")
+        else:
+            print(f"  ⚠️  No valid assignee IDs found for emails: {task_data.get('assignees')}")
     if task_data.get('priority'):
         # Convert priority names to ClickUp values
         priority_map = {'urgent': 1, 'high': 2, 'normal': 3, 'low': 4}
@@ -1452,6 +1480,7 @@ def create_clickup_tasks_via_mcp(action_items, destination, meeting_title, claud
 
         # Condense task name: remove assignee name and extra words
         condensed_name = item['task']
+        original_name = condensed_name  # For debugging
 
         # Remove assignee name from beginning (e.g., "Matt Rose will" -> "will")
         if item.get('assignee'):
@@ -1464,6 +1493,11 @@ def create_clickup_tasks_via_mcp(action_items, destination, meeting_title, claud
         # Capitalize first letter
         if condensed_name:
             condensed_name = condensed_name[0].upper() + condensed_name[1:]
+
+        # Log condensing if title changed
+        if condensed_name != original_name:
+            print(f"  ✂️  Condensed: '{original_name[:40]}...' → '{condensed_name[:40]}...'")
+
 
         # Intelligently truncate if too long (at word/phrase boundaries)
         if len(condensed_name) > 80:
