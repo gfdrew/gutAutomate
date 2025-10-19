@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "last_updated": "2025-10-19 15:38:21",
+  "last_updated": "2025-10-19 15:56:28",
   "meetings": [
     {
       "doc_id": "1E9eUPoj-1x5KxAyk3Ou9fKG78vzPTdRoVznQb80ViLY",
@@ -681,6 +681,59 @@
         {
           "task_id": "868g139g5",
           "task_name": "Send a one-sentence email confirming they are no longer working",
+          "list_id": "901104934665"
+        }
+      ]
+    },
+    {
+      "doc_id": "1mnnbdjRMmjVG9Yehlo0IdBv63q_t5vKiBeqnei60lxs",
+      "meeting_title": "\u201cProject Management Meeting \u201d Oct 9, 2025",
+      "email_id": "199ca3b80fb05d0b",
+      "processed_date": "2025-10-19 15:56:28",
+      "tasks_created": [
+        {
+          "task_id": "868g13ajk",
+          "task_name": "\ue907Art Okoro will approve the latest version of the color in frame.",
+          "list_id": "901104934665"
+        },
+        {
+          "task_id": "868g13ajm",
+          "task_name": "Adjust one section of the NDA.",
+          "list_id": "901104934665"
+        },
+        {
+          "task_id": "868g13ajn",
+          "task_name": "J J will reach out to more companies for Go Puff as a backup.",
+          "list_id": "901104934665"
+        },
+        {
+          "task_id": "868g13ajp",
+          "task_name": "Follow up with Wasserman on the college football thing.",
+          "list_id": "901104934665"
+        },
+        {
+          "task_id": "868g13ajq",
+          "task_name": "Email the little marketing shop.",
+          "list_id": "901104934665"
+        },
+        {
+          "task_id": "868g13ajr",
+          "task_name": "Request a strategy call with Taylor and Jess",
+          "list_id": "901104934665"
+        },
+        {
+          "task_id": "868g13aju",
+          "task_name": "Send another follow-up note to MetaQuest for future business and follow up",
+          "list_id": "901104934665"
+        },
+        {
+          "task_id": "868g13ajw",
+          "task_name": "Lead the creation of a Blink 182 'I Miss You' lip sync video to send",
+          "list_id": "901104934665"
+        },
+        {
+          "task_id": "868g13ajx",
+          "task_name": "Complete all the contracts.",
           "list_id": "901104934665"
         }
       ]

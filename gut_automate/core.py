@@ -1262,47 +1262,106 @@ def preview_clickup_tasks(action_items, meeting_title, destination=None, claude_
         return response == 'y'
 
 
-def send_drew_notification(meeting_title, task_count, created_task_ids):
+def send_drew_notification(meetings_processed):
     """
-    Send Drew a notification by creating a summary task in ClickUp.
+    Send Drew a detailed notification by creating a summary task in ClickUp.
 
     Args:
-        meeting_title: Title of the meeting that was processed
-        task_count: Number of tasks created
-        created_task_ids: List of task IDs that were created
+        meetings_processed: List of dicts with meeting info:
+            {
+                'meeting_title': str,
+                'tasks_created': list of dicts with 'name', 'assignee', 'priority', 'destination'
+            }
 
     Returns:
         dict: Notification task details for Claude Code to create
     """
     print("\nPreparing notification task for Drew...")
 
-    # Extract meeting name from title (remove quotes and date)
-    # Examples:
-    #   "BevMo Recurring StandUp" Oct 17, 2025 -> BevMo Recurring StandUp
-    #   Notes: "Gopuff NYE Team Sync" Oct 17, 2025 -> Gopuff NYE Team Sync
+    from datetime import datetime
     import re
-    meeting_name_match = re.search(r'"([^"]+)"', meeting_title)
-    if meeting_name_match:
-        meeting_name = meeting_name_match.group(1)
+
+    # Calculate totals
+    total_meetings = len(meetings_processed)
+    total_tasks = sum(len(m['tasks_created']) for m in meetings_processed)
+
+    # Generate title
+    if total_meetings == 1:
+        meeting_title = meetings_processed[0]['meeting_title']
+        meeting_name_match = re.search(r'"([^"]+)"', meeting_title)
+        meeting_name = meeting_name_match.group(1) if meeting_name_match else meeting_title
+        title = f"Meeting Processing: {meeting_name}, {total_tasks} tasks created"
     else:
-        # Fallback: use the whole title
-        meeting_name = meeting_title
+        title = f"Meeting Processing: {total_meetings} meetings, {total_tasks} tasks created"
 
-    # Create a summary notification task
+    # Build detailed description
+    description_parts = [
+        "Meeting Processing Summary\n",
+        f"Date: {datetime.now().strftime('%B %d, %Y')}",
+        f"Meetings Processed: {total_meetings}",
+        f"Total Tasks Created: {total_tasks}\n"
+    ]
+
+    # Add details for each meeting
+    for i, meeting in enumerate(meetings_processed, 1):
+        meeting_title = meeting['meeting_title']
+        meeting_name_match = re.search(r'"([^"]+)"', meeting_title)
+        meeting_name = meeting_name_match.group(1) if meeting_name_match else meeting_title
+
+        # Extract date from meeting title
+        date_match = re.search(r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d+,\s+\d{4}', meeting_title)
+        date_str = f" ({date_match.group(0)})" if date_match else ""
+
+        description_parts.append(f"Meeting {i}: \"{meeting_name}\"{date_str}\n")
+
+        tasks = meeting['tasks_created']
+        description_parts.append(f"Tasks Created: {len(tasks)}")
+
+        # Group tasks by destination (project)
+        tasks_by_project = {}
+        for task in tasks:
+            dest_key = f"{task.get('folder_name', 'Unknown')} → {task.get('list_name', 'Unknown')}"
+            if dest_key not in tasks_by_project:
+                tasks_by_project[dest_key] = []
+            tasks_by_project[dest_key].append(task)
+
+        if len(tasks_by_project) > 1:
+            description_parts[-1] += f" (across {len(tasks_by_project)} projects)"
+
+        description_parts.append("")
+
+        # List tasks grouped by project
+        for dest_key, dest_tasks in tasks_by_project.items():
+            description_parts.append(f"{dest_key}:\n")
+
+            for task in dest_tasks:
+                task_name = task['name']
+                assignee_name = task.get('assignee_name', '')
+                priority = task.get('priority', '')
+
+                # Build task line
+                task_line = f"- {task_name}"
+                if assignee_name:
+                    task_line += f" ({assignee_name})"
+                if priority and priority != 'None':
+                    priority_map = {'1': 'URGENT', '2': 'HIGH', '3': 'NORMAL', '4': 'LOW'}
+                    priority_text = priority_map.get(str(priority), str(priority).upper())
+                    task_line += f" - {priority_text} priority"
+
+                description_parts.append(task_line)
+
+            description_parts.append("")
+
+    # Add footer
+    description_parts.append("🤖 Automated by Claude Code meeting processor")
+
+    # Create notification task
     notification_task = {
-        'name': f'✓ Automated {task_count} tasks from {meeting_name}',
-        'markdown_description': f'''**gutAutomate successfully processed meeting notes!**
-
-**Meeting:** {meeting_title}
-**Tasks Created:** {task_count}
-**Timestamp:** {__import__('datetime').datetime.now().strftime('%B %d, %Y at %I:%M %p')}
-
-gutAutomate automatically extracted action items from your Gemini meeting notes and created ClickUp tasks with full context.
-
-All tasks have been assigned with due dates and priority levels based on the meeting discussion.''',
+        'name': title,
+        'markdown_description': '\n'.join(description_parts),
         'assignees': ['drew@gutfeeling.agency'],
-        'tags': ['gutAutomate', 'automation', 'meeting-notes'],
-        'priority': 'low',  # Low priority since it's just a notification
+        'tags': ['automation-summary', 'meeting-processed'],
+        'priority': 'normal',
         'list_id': '901112235176'  # Automation Summaries list
     }
 
@@ -1958,6 +2017,9 @@ def main(mode='auto'):
                     print(f"  Destination: {meeting['destination']['space_name']} → {meeting['destination']['folder_name']} → {meeting['destination']['list_name']}")
                     print()
 
+                # Track all meetings processed for summary notification
+                meetings_for_notification = []
+
                 # Step 4: Process each approved meeting
                 for idx, meeting in enumerate(meetings_data):
                     print(f"\n{'='*60}")
@@ -2013,6 +2075,7 @@ def main(mode='auto'):
                                 skipped_count = 0
                                 failed_count = 0
                                 task_urls = []
+                                tasks_for_notification = []  # Track task details for notification
 
                                 for task_data in result['prepared_tasks']:
                                     # Use per-task list_id if available, otherwise use meeting destination
@@ -2094,21 +2157,29 @@ def main(mode='auto'):
                                     if response:
                                         created_count += 1
                                         task_urls.append(response.get('url'))
+
+                                        # Collect task info for notification
+                                        # Extract assignee name from email
+                                        assignee_name = ''
+                                        assignees = task_data.get('assignees', [])
+                                        if assignees:
+                                            first_assignee = assignees[0]
+                                            if isinstance(first_assignee, str) and '@' in first_assignee:
+                                                # Extract name from email (e.g., drew@gutfeeling.agency -> Drew)
+                                                assignee_name = first_assignee.split('@')[0].title()
+
+                                        task_info = {
+                                            'name': task_data.get('name', ''),
+                                            'assignee_name': assignee_name,
+                                            'priority': task_data.get('priority'),
+                                            'folder_name': meeting['destination'].get('folder_name', 'Unknown'),
+                                            'list_name': meeting['destination'].get('list_name', 'Unknown')
+                                        }
+                                        tasks_for_notification.append(task_info)
                                         print("✓")
                                     else:
                                         failed_count += 1
                                         print("✗")
-
-                                # Create notification task
-                                print(f"\nCreating notification...", end=" ")
-                                created_task_ids = [url.split('/')[-1] for url in task_urls if url]
-                                notification = send_drew_notification(meeting_title, created_count, created_task_ids)
-                                notif_response = create_clickup_task_via_api(notification, api_token)
-
-                                if notif_response:
-                                    print("✓")
-                                else:
-                                    print("✗")
 
                                 # Summary
                                 print(f"\n{'='*60}")
@@ -2150,12 +2221,34 @@ def main(mode='auto'):
                                     )
                                     print(f"\n✓ Recorded meeting as processed in history database")
                                     print(f"   (Email left unread - you can mark it read when you're done with it)")
+
+                                    # Add this meeting to notification list
+                                    if tasks_for_notification:
+                                        meetings_for_notification.append({
+                                            'meeting_title': meeting['meeting_title'],
+                                            'tasks_created': tasks_for_notification
+                                        })
                                 else:
                                     print(f"\n⚠️  No tasks created/updated - meeting NOT recorded as processed")
                         else:
                             print("\n✗ Failed to prepare tasks")
                     else:
                         print("\n✗ Task creation cancelled by user.")
+
+                # Create summary notification after all meetings processed
+                if meetings_for_notification:
+                    print(f"\n{'='*60}")
+                    print(f"Creating summary notification...")
+                    print(f"{'='*60}")
+
+                    notification = send_drew_notification(meetings_for_notification)
+                    notif_response = create_clickup_task_via_api(notification, api_token)
+
+                    if notif_response:
+                        print(f"✓ Summary notification created")
+                        print(f"  {notif_response.get('url', '')}")
+                    else:
+                        print(f"✗ Failed to create summary notification")
 
 
 if __name__ == '__main__':
