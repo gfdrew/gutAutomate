@@ -61,13 +61,16 @@ def save_processed_meetings(data: Dict):
         print(f"⚠️  Error saving processed meetings: {e}")
 
 
-def check_meeting_processed(doc_id: str, meeting_title: str) -> Optional[Dict]:
+def check_meeting_processed(doc_id: str = None, meeting_title: str = None, email_id: str = None) -> Optional[Dict]:
     """
     Check if a meeting has already been processed.
 
+    Can check by doc_id, email_id, or both.
+
     Args:
-        doc_id: Google Doc ID of the meeting notes
-        meeting_title: Title of the meeting
+        doc_id: Google Doc ID of the meeting notes (optional)
+        meeting_title: Title of the meeting (optional)
+        email_id: Gmail email ID (optional)
 
     Returns:
         Meeting data if previously processed, None otherwise
@@ -75,7 +78,12 @@ def check_meeting_processed(doc_id: str, meeting_title: str) -> Optional[Dict]:
     data = load_processed_meetings()
 
     for meeting in data.get('meetings', []):
-        if meeting.get('doc_id') == doc_id:
+        # Check by doc_id if provided
+        if doc_id and meeting.get('doc_id') == doc_id:
+            return meeting
+
+        # Check by email_id if provided
+        if email_id and meeting.get('email_id') == email_id:
             return meeting
 
     return None

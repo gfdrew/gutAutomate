@@ -1889,6 +1889,19 @@ def main(mode='auto'):
                     # Extract document ID for copying
                     doc_id = extract_document_id(email['meeting_notes_link'])
 
+                    # Check if this meeting has already been processed
+                    from gut_automate.duplicate_detection import check_meeting_processed
+                    already_processed = check_meeting_processed(
+                        doc_id=doc_id,
+                        email_id=email['email_id']
+                    )
+
+                    if already_processed:
+                        print(f"⏭️  SKIPPED: This meeting was already processed on {already_processed.get('processed_date')}")
+                        print(f"   {len(already_processed.get('tasks_created', []))} tasks were created")
+                        print(f"   To re-process, delete this meeting from data/processed_meetings.json\n")
+                        continue
+
                     # Copy document to shared drive
                     if doc_id:
                         copy_result = copy_doc_to_shared_drive(doc_id, meeting_title)
@@ -1908,6 +1921,7 @@ def main(mode='auto'):
                         # Store meeting data
                         meetings_data.append({
                             'email_id': email['email_id'],
+                            'doc_id': doc_id,
                             'meeting_title': meeting_title,
                             'action_items': action_items,
                             'destination': destination
@@ -2102,6 +2116,25 @@ def main(mode='auto'):
                                 if created_count > 0 or updated_count > 0:
                                     print(f"\n✓ Marking email as read...")
                                     mark_emails_as_read([meeting['email_id']])
+
+                                    # Record this meeting as processed
+                                    from gut_automate.duplicate_detection import record_processed_meeting
+                                    tasks_created_records = [
+                                        {
+                                            'task_id': url.split('/')[-1] if url else None,
+                                            'task_name': task_data.get('name', ''),
+                                            'list_id': meeting['destination']['list_id']
+                                        }
+                                        for task_data, url in zip(result['prepared_tasks'], task_urls)
+                                        if url
+                                    ]
+                                    record_processed_meeting(
+                                        doc_id=meeting.get('doc_id', ''),
+                                        meeting_title=meeting['meeting_title'],
+                                        email_id=meeting['email_id'],
+                                        tasks_created=tasks_created_records
+                                    )
+                                    print(f"✓ Recorded meeting as processed")
                                 else:
                                     print(f"\n⚠️  No tasks created/updated - email NOT marked as read")
                         else:
