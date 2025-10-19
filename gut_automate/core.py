@@ -1871,11 +1871,6 @@ def main(mode='auto'):
         else:
             print(f"\n✓ {len(approved_indices)} meeting(s) approved")
 
-            # Mark approved emails as read
-            approved_email_ids = [emails[idx]['email_id'] for idx in approved_indices]
-            print(f"\nMarking {len(approved_email_ids)} email(s) as read...")
-            mark_emails_as_read(approved_email_ids)
-
             print(f"\n{'='*60}")
             print(f"Fetching content for approved meetings...")
             print(f"{'='*60}\n")
@@ -2074,7 +2069,8 @@ def main(mode='auto'):
 
                                 # Create notification task
                                 print(f"\nCreating notification...", end=" ")
-                                notification['list_id'] = '901112235176'  # Automation Summaries
+                                created_task_ids = [url.split('/')[-1] for url in task_urls if url]
+                                notification = send_drew_notification(meeting_title, created_count, created_task_ids)
                                 notif_response = create_clickup_task_via_api(notification, api_token)
 
                                 if notif_response:
@@ -2101,6 +2097,13 @@ def main(mode='auto'):
                                             print(f"  {url}")
                                     if len(task_urls) > 5:
                                         print(f"  ... and {len(task_urls) - 5} more")
+
+                                # Mark email as read ONLY after successful processing
+                                if created_count > 0 or updated_count > 0:
+                                    print(f"\n✓ Marking email as read...")
+                                    mark_emails_as_read([meeting['email_id']])
+                                else:
+                                    print(f"\n⚠️  No tasks created/updated - email NOT marked as read")
                         else:
                             print("\n✗ Failed to prepare tasks")
                     else:
