@@ -1846,12 +1846,12 @@ def prompt_for_meeting_approval(emails, claude_mode=False):
             return []
 
 
-def main(mode='standalone'):
+def main(mode='claude'):
     """
     Main entry point for gutAutomate.
 
     Args:
-        mode: 'standalone' or 'claude'
+        mode: 'standalone' or 'claude' (default: 'claude')
     """
     # Determine if Claude mode is enabled
     claude_mode = mode == 'claude'
@@ -2165,10 +2165,10 @@ Examples:
     parser.add_argument(
         'mode',
         nargs='?',
-        choices=['claude'],
-        default='standalone',
-        help='Run mode: omit for standalone, "claude" for Claude Code integration'
+        choices=['claude', 'standalone'],
+        default='claude',
+        help='Run mode: omit for claude (default), "standalone" for non-MCP mode'
     )
     args = parser.parse_args()
 
-    main(args.mode if args.mode else 'standalone')
+    main(args.mode if args.mode else 'claude')
