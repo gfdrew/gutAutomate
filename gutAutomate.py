@@ -1287,7 +1287,7 @@ def get_clickup_api_token():
 # Cache for email to user ID mapping (to avoid repeated API calls)
 _email_to_id_cache = {}
 
-def resolve_email_to_clickup_id(email, api_token, workspace_id='2538614', debug=False):
+def resolve_email_to_clickup_id(email, api_token, workspace_id='9011049981', debug=False):
     """
     Convert email address to ClickUp user ID by looking up workspace members.
     Caches results to avoid repeated API calls.
