@@ -105,8 +105,11 @@ def prompt_duplicate_action(new_task, existing_task, similarity, changes):
     print("  3) Create - Create new task anyway (ignore duplicate)")
     print("="*70)
 
-    if BATCH_MODE:
-        print("[BATCH MODE: auto-selecting 'skip']")
+    # Check for automation mode (BATCH_MODE or TASK_CONFIRMATION env var)
+    task_confirmation = os.environ.get('TASK_CONFIRMATION', '').strip().lower()
+
+    if BATCH_MODE or task_confirmation in ['y', 'yes']:
+        print("[AUTO MODE: auto-selecting 'skip' for duplicate]")
         return 'skip'
 
     choice = input("\nYour choice (1/2/3): ").strip()
