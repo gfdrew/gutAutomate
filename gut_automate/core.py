@@ -767,6 +767,11 @@ def shorten_task_name(task_text, assignee=None):
 
     # Original text for reference
     original = task_text.strip()
+
+    # Remove Unicode private use area characters (like \ue907)
+    # These can come from copy-paste or certain text processing
+    original = re.sub(r'[\ue000-\uf8ff]', '', original)
+
     shortened = original
 
     # Remove assignee name + "will" pattern at start
@@ -1706,6 +1711,9 @@ def create_clickup_tasks_via_mcp(action_items, destination, meeting_title, claud
 
         # Condense task name: remove assignee name and extra words
         condensed_name = item['task']
+
+        # Remove Unicode private use area characters (like \ue907)
+        condensed_name = re.sub(r'[\ue000-\uf8ff]', '', condensed_name)
 
         # Remove assignee name from beginning (e.g., "Matt Rose will" -> "will")
         if item.get('assignee'):
