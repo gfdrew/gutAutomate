@@ -1245,19 +1245,21 @@ def preview_clickup_tasks(action_items, meeting_title, destination=None, claude_
     print(f"TOTAL: {len(action_items)} tasks ready to create")
     print("=" * 60)
 
-    if claude_mode:
-        # In claude mode, expect TASK_CONFIRMATION environment variable
-        import os
-        confirmation = os.environ.get('TASK_CONFIRMATION', '').strip().lower()
+    # Check for TASK_CONFIRMATION environment variable
+    confirmation = os.environ.get('TASK_CONFIRMATION', '').strip().lower()
+
+    if confirmation:
+        # Using environment variable
         if confirmation == 'y' or confirmation == 'yes':
-            print("\n🤖 CLAUDE MODE: Task creation confirmed")
+            print(f"\n✓ Using TASK_CONFIRMATION={confirmation} - Creating tasks")
             return True
         else:
-            print("\n🤖 CLAUDE MODE: No TASK_CONFIRMATION, skipping task creation")
+            print(f"\n✓ Using TASK_CONFIRMATION={confirmation} - Skipping task creation")
             return False
-
-    response = get_user_input("\nCreate these tasks in ClickUp? (y/n): ", 'y').lower()
-    return response == 'y'
+    else:
+        # Interactive mode
+        response = get_user_input("\nCreate these tasks in ClickUp? (y/n): ", 'y').lower()
+        return response == 'y'
 
 
 def send_drew_notification(meeting_title, task_count, created_task_ids):
@@ -1806,11 +1808,6 @@ def prompt_for_meeting_approval(emails, claude_mode=False):
         # Using environment variable
         print(f"\n✓ Using MEETING_SELECTION={selection}")
         response = selection.strip().lower()
-    elif claude_mode:
-        # Claude mode but no environment variable
-        print("\n🤖 CLAUDE MODE: No MEETING_SELECTION environment variable found.")
-        print("   Expected format: 'all' or '1,2' or '2'")
-        return []
     else:
         # Interactive mode
         response = get_user_input("\nYour choice: ", 'all').lower()
@@ -1846,21 +1843,18 @@ def prompt_for_meeting_approval(emails, claude_mode=False):
             return []
 
 
-def main(mode='claude'):
+def main(mode='auto'):
     """
     Main entry point for gutAutomate.
 
+    Always runs in automatic mode using REST API.
+    Claude consultation available for low-confidence decisions.
+
     Args:
-        mode: 'standalone' or 'claude' (default: 'claude')
+        mode: Deprecated parameter (kept for backward compatibility)
     """
-    # Determine if Claude mode is enabled
-    claude_mode = mode == 'claude'
-
-    if claude_mode:
-        print("🤖 Running in CLAUDE MODE - Tasks will be created in ClickUp")
-    else:
-        print("📋 Running in STANDALONE MODE - Tasks will be prepared only")
-
+    print("🚀 gutAutomate - Intelligent Meeting Note Processing")
+    print("   Using: REST API (direct) + Optional Claude consultation")
     print()
 
     # Complete workflow: Find meeting notes, fetch content, parse action items, preview tasks
@@ -1870,7 +1864,7 @@ def main(mode='claude'):
         print("\nNo meeting notes emails found to process.")
     else:
         # Step 1: Show all meetings and get approval BEFORE fetching content
-        approved_indices = prompt_for_meeting_approval(emails, claude_mode=claude_mode)
+        approved_indices = prompt_for_meeting_approval(emails)
 
         if not approved_indices:
             print("\n✗ No meetings approved for processing.")
@@ -1948,203 +1942,165 @@ def main(mode='claude'):
                     should_create = preview_clickup_tasks(
                         meeting['action_items'],
                         meeting['meeting_title'],
-                        meeting['destination'],
-                        claude_mode=claude_mode
+                        meeting['destination']
                     )
 
                     if should_create:
-                        print("\n✓ User confirmed - Preparing tasks for creation...")
+                        print("\n✓ User confirmed - Creating tasks via ClickUp REST API...")
 
-                        # Prepare tasks for ClickUp (use MCP-aware version)
+                        # Prepare tasks for ClickUp
                         result = create_clickup_tasks_via_mcp(
                             meeting['action_items'],
                             meeting['destination'],
                             meeting['meeting_title'],
-                            claude_mode=claude_mode
+                            claude_mode=False  # Always use REST API format
                         )
 
                         if result.get('ready'):
                             print(f"\n✓ Tasks prepared successfully!")
                             print(f"  {result['count']} tasks ready to be created in ClickUp")
 
-                            # Prepare notification to Drew
-                            notification = send_drew_notification(
-                                meeting['meeting_title'],
-                                result['count'],
-                                []
-                            )
+                            # Get API token
+                            api_token = get_clickup_api_token()
 
-                            if claude_mode:
-                                import json
-
-                                print(f"\n🤖 CLAUDE MODE: Outputting JSON for Claude Code to process")
-
-                                # Output JSON that Claude Code can parse
-                                output_data = {
-                                    'status': 'ready_for_mcp',
-                                    'meeting_title': meeting['meeting_title'],
-                                    'list_id': meeting['destination']['list_id'],
-                                    'destination': meeting['destination'],
-                                    'task_count': result['count'],
-                                    'prepared_tasks': result['prepared_tasks'],
-                                    'notification': {
-                                        'list_id': '901112235176',  # Automation Summaries
-                                        'name': notification['name'],
-                                        'markdown_description': notification['markdown_description'],
-                                        'assignees': notification.get('assignees', []),
-                                        'tags': notification.get('tags', [])
-                                    }
-                                }
-
-                                print("\n" + "=" * 60)
-                                print("JSON_OUTPUT_START")
-                                print(json.dumps(output_data, indent=2, default=str))
-                                print("JSON_OUTPUT_END")
-                                print("=" * 60)
+                            if not api_token:
+                                print(f"\n⚠️  Skipping task creation (no API token)")
+                                print(f"\nTo create these tasks later:")
+                                print(f"  1. Get API token from https://app.clickup.com/settings/apps")
+                                print(f"  2. Run: export CLICKUP_API_TOKEN='your_token'")
+                                print(f"  3. Re-run this script")
                             else:
-                                print(f"\n📋 STANDALONE MODE: Creating tasks via ClickUp API...")
+                                # Import duplicate detection functions
+                                from gut_automate.duplicate_detection import (
+                                    find_similar_tasks, compare_tasks,
+                                    merge_descriptions, create_update_comment
+                                )
 
-                                # Get API token
-                                api_token = get_clickup_api_token()
+                                # Fetch existing tasks from destination list for duplicate detection
+                                print(f"\n🔍 Checking for duplicate tasks in destination list...")
+                                existing_tasks = get_tasks_from_list(meeting['destination']['list_id'], api_token)
+                                print(f"   Found {len(existing_tasks)} existing tasks")
 
-                                if not api_token:
-                                    print(f"\n⚠️  Skipping task creation (no API token)")
-                                    print(f"\nTo create these tasks later:")
-                                    print(f"  1. Get API token from https://app.clickup.com/settings/apps")
-                                    print(f"  2. Run: export CLICKUP_API_TOKEN='your_token'")
-                                    print(f"  3. Re-run this script")
-                                else:
-                                    # Import duplicate detection functions
-                                    from gut_automate.duplicate_detection import (
-                                        find_similar_tasks, compare_tasks,
-                                        merge_descriptions, create_update_comment
-                                    )
+                                # Create tasks via API with duplicate detection
+                                created_count = 0
+                                updated_count = 0
+                                skipped_count = 0
+                                failed_count = 0
+                                task_urls = []
 
-                                    # Fetch existing tasks from destination list for duplicate detection
-                                    print(f"\n🔍 Checking for duplicate tasks in destination list...")
-                                    existing_tasks = get_tasks_from_list(destination['list_id'], api_token)
-                                    print(f"   Found {len(existing_tasks)} existing tasks")
+                                for task_data in result['prepared_tasks']:
+                                    # Add list_id to task_data
+                                    task_data['list_id'] = destination['list_id']
 
-                                    # Create tasks via API with duplicate detection
-                                    created_count = 0
-                                    updated_count = 0
-                                    skipped_count = 0
-                                    failed_count = 0
-                                    task_urls = []
+                                    print(f"\n📝 Processing: {task_data['name'][:60]}...")
 
-                                    for task_data in result['prepared_tasks']:
-                                        # Add list_id to task_data
-                                        task_data['list_id'] = destination['list_id']
+                                    # Check for duplicates
+                                    matches = find_similar_tasks(task_data, existing_tasks, threshold=0.85)
 
-                                        print(f"\n📝 Processing: {task_data['name'][:60]}...")
+                                    if matches:
+                                        # Found potential duplicate
+                                        existing_task, similarity = matches[0]
 
-                                        # Check for duplicates
-                                        matches = find_similar_tasks(task_data, existing_tasks, threshold=0.85)
+                                        # Compare to see what changed
+                                        changes = compare_tasks(task_data, existing_task)
 
-                                        if matches:
-                                            # Found potential duplicate
-                                            existing_task, similarity = matches[0]
+                                        # Prompt user for action
+                                        action = prompt_duplicate_action(
+                                            task_data, existing_task, similarity, changes
+                                        )
 
-                                            # Compare to see what changed
-                                            changes = compare_tasks(task_data, existing_task)
+                                        if action == 'skip':
+                                            print("   ⏭️  Skipped (duplicate)")
+                                            skipped_count += 1
+                                            continue
 
-                                            # Prompt user for action
-                                            action = prompt_duplicate_action(
-                                                task_data, existing_task, similarity, changes
-                                            )
+                                        elif action == 'update':
+                                            print("   🔄 Updating existing task...", end=" ")
 
-                                            if action == 'skip':
-                                                print("   ⏭️  Skipped (duplicate)")
-                                                skipped_count += 1
-                                                continue
+                                            # Prepare updates
+                                            updates = {}
 
-                                            elif action == 'update':
-                                                print("   🔄 Updating existing task...", end=" ")
+                                            # Update due date if changed
+                                            if changes.get('due_date_changed'):
+                                                updates['due_date'] = changes['new_due_date']
 
-                                                # Prepare updates
-                                                updates = {}
+                                            # Update assignees if changed
+                                            if changes.get('assignee_changed'):
+                                                updates['assignees'] = task_data.get('assignees', [])
 
-                                                # Update due date if changed
-                                                if changes.get('due_date_changed'):
-                                                    updates['due_date'] = changes['new_due_date']
+                                            # Merge descriptions if different
+                                            if changes.get('description_different'):
+                                                merged_desc = merge_descriptions(
+                                                    changes['old_description'],
+                                                    changes['new_description']
+                                                )
+                                                updates['markdown_description'] = merged_desc
 
-                                                # Update assignees if changed
-                                                if changes.get('assignee_changed'):
-                                                    updates['assignees'] = task_data.get('assignees', [])
+                                            # Update the task
+                                            if updates:
+                                                update_response = update_clickup_task(
+                                                    existing_task['id'], updates, api_token
+                                                )
 
-                                                # Merge descriptions if different
-                                                if changes.get('description_different'):
-                                                    merged_desc = merge_descriptions(
-                                                        changes['old_description'],
-                                                        changes['new_description']
-                                                    )
-                                                    updates['markdown_description'] = merged_desc
+                                                if update_response:
+                                                    # Add comment explaining the update
+                                                    comment_text = create_update_comment(meeting_title, changes)
+                                                    add_task_comment(existing_task['id'], comment_text, api_token)
 
-                                                # Update the task
-                                                if updates:
-                                                    update_response = update_clickup_task(
-                                                        existing_task['id'], updates, api_token
-                                                    )
-
-                                                    if update_response:
-                                                        # Add comment explaining the update
-                                                        comment_text = create_update_comment(meeting_title, changes)
-                                                        add_task_comment(existing_task['id'], comment_text, api_token)
-
-                                                        updated_count += 1
-                                                        task_url = existing_task.get('url', '')
-                                                        task_urls.append(task_url)
-                                                        print("✓")
-                                                    else:
-                                                        failed_count += 1
-                                                        print("✗")
+                                                    updated_count += 1
+                                                    task_url = existing_task.get('url', '')
+                                                    task_urls.append(task_url)
+                                                    print("✓")
                                                 else:
-                                                    print("(no changes needed)")
-                                                    skipped_count += 1
+                                                    failed_count += 1
+                                                    print("✗")
+                                            else:
+                                                print("(no changes needed)")
+                                                skipped_count += 1
 
-                                                continue
+                                            continue
 
-                                        # No duplicate or user chose to create anyway
-                                        print("   ➕ Creating new task...", end=" ")
-                                        response = create_clickup_task_via_api(task_data, api_token)
+                                    # No duplicate or user chose to create anyway
+                                    print("   ➕ Creating new task...", end=" ")
+                                    response = create_clickup_task_via_api(task_data, api_token)
 
-                                        if response:
-                                            created_count += 1
-                                            task_urls.append(response.get('url'))
-                                            print("✓")
-                                        else:
-                                            failed_count += 1
-                                            print("✗")
-
-                                    # Create notification task
-                                    print(f"\nCreating notification...", end=" ")
-                                    notification['list_id'] = '901112235176'  # Automation Summaries
-                                    notif_response = create_clickup_task_via_api(notification, api_token)
-
-                                    if notif_response:
+                                    if response:
+                                        created_count += 1
+                                        task_urls.append(response.get('url'))
                                         print("✓")
                                     else:
+                                        failed_count += 1
                                         print("✗")
 
-                                    # Summary
-                                    print(f"\n{'='*60}")
-                                    print(f"TASK PROCESSING COMPLETE")
-                                    print(f"{'='*60}")
-                                    print(f"➕ Created: {created_count}")
-                                    if updated_count > 0:
-                                        print(f"🔄 Updated: {updated_count}")
-                                    if skipped_count > 0:
-                                        print(f"⏭️  Skipped: {skipped_count}")
-                                    if failed_count > 0:
-                                        print(f"✗ Failed: {failed_count}")
+                                # Create notification task
+                                print(f"\nCreating notification...", end=" ")
+                                notification['list_id'] = '901112235176'  # Automation Summaries
+                                notif_response = create_clickup_task_via_api(notification, api_token)
 
-                                    if task_urls:
-                                        print(f"\nProcessed tasks:")
-                                        for url in task_urls[:5]:  # Show first 5
-                                            if url:
-                                                print(f"  {url}")
-                                        if len(task_urls) > 5:
-                                            print(f"  ... and {len(task_urls) - 5} more")
+                                if notif_response:
+                                    print("✓")
+                                else:
+                                    print("✗")
+
+                                # Summary
+                                print(f"\n{'='*60}")
+                                print(f"TASK PROCESSING COMPLETE")
+                                print(f"{'='*60}")
+                                print(f"➕ Created: {created_count}")
+                                if updated_count > 0:
+                                    print(f"🔄 Updated: {updated_count}")
+                                if skipped_count > 0:
+                                    print(f"⏭️  Skipped: {skipped_count}")
+                                if failed_count > 0:
+                                    print(f"✗ Failed: {failed_count}")
+
+                                if task_urls:
+                                    print(f"\nProcessed tasks:")
+                                    for url in task_urls[:5]:  # Show first 5
+                                        if url:
+                                            print(f"  {url}")
+                                    if len(task_urls) > 5:
+                                        print(f"  ... and {len(task_urls) - 5} more")
                         else:
                             print("\n✗ Failed to prepare tasks")
                     else:
@@ -2158,17 +2114,18 @@ if __name__ == '__main__':
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python3 core.py           # Standalone mode (prepare tasks only)
-  python3 core.py claude    # Claude mode (create tasks via MCP)
+  python3 -m gut_automate.core               # Auto mode (REST API)
+  MEETING_SELECTION="all" python3 -m ...     # Skip meeting selection
+  TASK_CONFIRMATION="y" python3 -m ...       # Skip task confirmation
         """
     )
+    # Keep mode argument for backward compatibility but ignore it
     parser.add_argument(
         'mode',
         nargs='?',
-        choices=['claude', 'standalone'],
-        default='claude',
-        help='Run mode: omit for claude (default), "standalone" for non-MCP mode'
+        default='auto',
+        help='Deprecated - kept for backward compatibility only'
     )
     args = parser.parse_args()
 
-    main(args.mode if args.mode else 'claude')
+    main()
