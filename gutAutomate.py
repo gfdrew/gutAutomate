@@ -1068,7 +1068,6 @@ def preview_clickup_tasks(action_items, meeting_title, destination=None, claude_
 
     if claude_mode:
         # In claude mode, expect TASK_CONFIRMATION environment variable
-        import os
         confirmation = os.environ.get('TASK_CONFIRMATION', '').strip().lower()
         if confirmation == 'y' or confirmation == 'yes':
             print("\n🤖 CLAUDE MODE: Task creation confirmed")
