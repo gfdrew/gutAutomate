@@ -831,9 +831,107 @@ def parse_action_items(notes_content, meeting_title="", debug=False):
     return unique_items
 
 
+def get_workspace_list_index():
+    """
+    Build an index of all lists in the workspace with their full hierarchy.
+    This is cached for performance.
+
+    Returns:
+        list: List of dicts with space_name, folder_name, list_name, list_id
+    """
+    # Hardcoded index from workspace hierarchy (updated: 2025-10-18)
+    # To refresh: Use mcp__clickup__clickup_get_workspace_hierarchy
+    return [
+        # Executive Assistant Space
+        {'space_name': 'Executive Assistant', 'folder_name': None, 'list_name': '📋 Internal Requests', 'list_id': '901102879966'},
+        {'space_name': 'Executive Assistant', 'folder_name': None, 'list_name': '📋 External Requests', 'list_id': '901102885711'},
+        {'space_name': 'Executive Assistant', 'folder_name': None, 'list_name': 'Action Items 2', 'list_id': '901103315630'},
+        {'space_name': 'Executive Assistant', 'folder_name': None, 'list_name': 'Action Items  1', 'list_id': '901103322623'},
+
+        # Clients Space - Gut Feeling Folder
+        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'MM Leads', 'list_id': '901110422131'},
+        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'Gut Feeling Triage', 'list_id': '901109584015'},
+        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'Leadership Meeting Topics', 'list_id': '901108467134'},
+        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'Operations', 'list_id': '901104934665'},
+        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'Client Acquisition', 'list_id': '901108236016'},
+        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'Financials', 'list_id': '901105030499'},
+        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'MicroCast', 'list_id': '901109757652'},
+        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'Talent Acquisition', 'list_id': '901109700733'},
+        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'Community Mgmt', 'list_id': '901109700881'},
+        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'New Services Dev', 'list_id': '901109700922'},
+        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'IT Support', 'list_id': '901110006262'},
+        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'Backlog: Website', 'list_id': '901109316657'},
+        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'Backlog: Company Decks', 'list_id': '901109322405'},
+        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'LA Rooftop', 'list_id': '901111008322'},
+        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'Automation Summaries', 'list_id': '901112235176'},
+
+        # Clients Space - Other Client Folders
+        {'space_name': 'Clients', 'folder_name': 'H&S', 'list_name': 'H&S Triage', 'list_id': '901109583957'},
+        {'space_name': 'Clients', 'folder_name': 'H&S', 'list_name': 'H&S Admin', 'list_id': '901109586328'},
+        {'space_name': 'Clients', 'folder_name': 'EyeSight', 'list_name': 'EyeSight Triage', 'list_id': '901109583978'},
+        {'space_name': 'Clients', 'folder_name': 'EyeSight', 'list_name': 'EyeSight Admin', 'list_id': '901109586375'},
+        {'space_name': 'Clients', 'folder_name': 'EyeSight', 'list_name': 'Solomon Shoes', 'list_id': '901111756808'},
+        {'space_name': 'Clients', 'folder_name': 'Wasserman', 'list_name': 'Wasserman Triage', 'list_id': '901109583990'},
+        {'space_name': 'Clients', 'folder_name': 'Wasserman', 'list_name': 'Wasserman Admin', 'list_id': '901109586392'},
+        {'space_name': 'Clients', 'folder_name': 'Block', 'list_name': 'Block Triage', 'list_id': '901110683984'},
+        {'space_name': 'Clients', 'folder_name': 'Block', 'list_name': 'Block Admin', 'list_id': '901110683983'},
+        {'space_name': 'Clients', 'folder_name': 'Block', 'list_name': 'Bitkey & Natalie Brunell', 'list_id': '901111971274'},
+        {'space_name': 'Clients', 'folder_name': 'Little Marketing Shop', 'list_name': 'Triage', 'list_id': '901110886776'},
+        {'space_name': 'Clients', 'folder_name': 'Little Marketing Shop', 'list_name': 'Admin', 'list_id': '901110886777'},
+        {'space_name': 'Clients', 'folder_name': 'Little Marketing Shop', 'list_name': 'Gimme Seaweed — Campaign', 'list_id': '901110886778'},
+        {'space_name': 'Clients', 'folder_name': 'Little Marketing Shop', 'list_name': 'OoMee — Founder Shoot', 'list_id': '901111045472'},
+        {'space_name': 'Clients', 'folder_name': 'Little Marketing Shop', 'list_name': 'Gimmee UGC Post Pro', 'list_id': '901111667678'},
+        {'space_name': 'Clients', 'folder_name': 'Meta', 'list_name': 'Meta Triage', 'list_id': '901109583995'},
+        {'space_name': 'Clients', 'folder_name': 'Meta', 'list_name': 'Meta Admin', 'list_id': '901109586409'},
+        {'space_name': 'Clients', 'folder_name': 'Meta', 'list_name': 'CFO: Paige Bueckers & Azzi Fudd', 'list_id': '901111103200'},
+        {'space_name': 'Clients', 'folder_name': 'Meta', 'list_name': 'CFO: Summer I Turned Pretty Season Finale', 'list_id': '901111103203'},
+        {'space_name': 'Clients', 'folder_name': 'Meta', 'list_name': 'CFO: TC + Knicks Post', 'list_id': '901111755362'},
+        {'space_name': 'Clients', 'folder_name': 'Red Cross', 'list_name': 'Red Cross Triage', 'list_id': '901109909812'},
+        {'space_name': 'Clients', 'folder_name': 'Red Cross', 'list_name': 'Red Cross Admin', 'list_id': '901109909811'},
+        {'space_name': 'Clients', 'folder_name': 'Red Cross', 'list_name': 'Red Cross: Sept 6 Blood Drive In The Bronx', 'list_id': '901111080010'},
+        {'space_name': 'Clients', 'folder_name': 'Red Cross', 'list_name': 'Blood Drive In The Bronx', 'list_id': '901111120161'},
+        {'space_name': 'Clients', 'folder_name': 'Shopify', 'list_name': 'Triage', 'list_id': '901111054771'},
+        {'space_name': 'Clients', 'folder_name': 'Shopify', 'list_name': 'Admin', 'list_id': '901111054772'},
+        {'space_name': 'Clients', 'folder_name': 'Gopuff', 'list_name': 'Triage', 'list_id': '901111841330'},
+        {'space_name': 'Clients', 'folder_name': 'Gopuff', 'list_name': 'Admin', 'list_id': '901111841329'},
+        {'space_name': 'Clients', 'folder_name': 'Gopuff', 'list_name': 'NYE RR + WK', 'list_id': '901111841331'},
+        {'space_name': 'Clients', 'folder_name': 'Nysonian', 'list_name': 'Triage', 'list_id': '901111924758'},
+        {'space_name': 'Clients', 'folder_name': 'Nysonian', 'list_name': 'Admin', 'list_id': '901111924757'},
+        {'space_name': 'Clients', 'folder_name': 'Nysonian', 'list_name': 'NOBL Q4', 'list_id': '901111924759'},
+        {'space_name': 'Clients', 'folder_name': 'BevMo', 'list_name': 'Triage', 'list_id': '901112154119'},
+        {'space_name': 'Clients', 'folder_name': 'BevMo', 'list_name': 'Admin', 'list_id': '901112154117'},
+        {'space_name': 'Clients', 'folder_name': 'BevMo', 'list_name': 'Holiday CTV 2025', 'list_id': '901112154120'},
+        {'space_name': 'Clients', 'folder_name': "Mike's Hot Honey", 'list_name': 'Triage', 'list_id': '901112223783'},
+        {'space_name': 'Clients', 'folder_name': "Mike's Hot Honey", 'list_name': 'Admin', 'list_id': '901112223782'},
+        {'space_name': 'Clients', 'folder_name': "Mike's Hot Honey", 'list_name': 'MMB1', 'list_id': '901112223784'},
+
+        # Resources Space
+        {'space_name': 'Resources', 'folder_name': 'List Templates', 'list_name': 'Project Template', 'list_id': '901111083116'},
+        {'space_name': 'Resources', 'folder_name': 'List Templates', 'list_name': '[Client]-MMB#', 'list_id': '901109558046'},
+        {'space_name': 'Resources', 'folder_name': 'List Templates', 'list_name': 'Templates', 'list_id': '901103709290'},
+        {'space_name': 'Resources', 'folder_name': '[New Client Name]', 'list_name': 'Onboarding', 'list_id': '901103680855'},
+        {'space_name': 'Resources', 'folder_name': '[New Client Name]', 'list_name': '[Client] Triage', 'list_id': '901109569909'},
+        {'space_name': 'Resources', 'folder_name': '[New Client Name]', 'list_name': '[Client] Admin', 'list_id': '901109569964'},
+        {'space_name': 'Resources', 'folder_name': 'New Client Setup Template', 'list_name': 'Triage', 'list_id': '901111101466'},
+        {'space_name': 'Resources', 'folder_name': 'New Client Setup Template', 'list_name': 'Admin', 'list_id': '901111101465'},
+        {'space_name': 'Resources', 'folder_name': None, 'list_name': 'Wiki', 'list_id': '901103713682'},
+        {'space_name': 'Resources', 'folder_name': None, 'list_name': 'Process Needs', 'list_id': '901103716628'},
+        {'space_name': 'Resources', 'folder_name': None, 'list_name': 'Internal Onboarding', 'list_id': '901103773485'},
+        {'space_name': 'Resources', 'folder_name': None, 'list_name': 'Team Onboarding', 'list_id': '901103773568'},
+        {'space_name': 'Resources', 'folder_name': None, 'list_name': 'Tools', 'list_id': '901103812163'},
+        {'space_name': 'Resources', 'folder_name': None, 'list_name': 'Guest List', 'list_id': '901105692646'},
+
+        # Talent Center Space
+        {'space_name': 'Talent Center', 'folder_name': None, 'list_name': 'Contractors', 'list_id': '901103813246'},
+        {'space_name': 'Talent Center', 'folder_name': None, 'list_name': 'Casting Database', 'list_id': '901103914715'},
+        {'space_name': 'Talent Center', 'folder_name': None, 'list_name': 'Location Database', 'list_id': '901103967580'},
+    ]
+
+
 def smart_destination_detection(meeting_title):
     """
     Automatically detect the appropriate ClickUp destination based on meeting title.
+    Uses fuzzy matching against all workspace lists.
 
     Args:
         meeting_title: Title of the meeting
@@ -843,39 +941,62 @@ def smart_destination_detection(meeting_title):
     """
     meeting_lower = meeting_title.lower()
 
-    # Define keyword mappings to ClickUp lists
-    keyword_mappings = {
-        'bevmo': {
-            'space_name': 'Clients',
-            'folder_name': 'BevMo',
-            'list_name': 'Holiday CTV 2025',
-            'list_id': '901112154120'
-        },
-        'holiday ctv': {
-            'space_name': 'Clients',
-            'folder_name': 'BevMo',
-            'list_name': 'Holiday CTV 2025',
-            'list_id': '901112154120'
-        },
-        'gopuff': {
-            'space_name': 'Clients',
-            'folder_name': 'Gopuff',
-            'list_name': 'NYE RR + WK',
-            'list_id': '901106184953'
-        },
-        'nye': {
-            'space_name': 'Clients',
-            'folder_name': 'Gopuff',
-            'list_name': 'NYE RR + WK',
-            'list_id': '901106184953'
-        },
-        # Add more mappings as needed
-    }
+    # Get all lists
+    all_lists = get_workspace_list_index()
 
-    # Check for keyword matches
-    for keyword, destination in keyword_mappings.items():
-        if keyword in meeting_lower:
-            return destination
+    # Score each list based on keyword matches
+    best_match = None
+    best_score = 0
+
+    for list_info in all_lists:
+        score = 0
+
+        # Check folder name match
+        if list_info['folder_name']:
+            folder_lower = list_info['folder_name'].lower()
+            # Remove trailing spaces and special chars for matching
+            folder_clean = folder_lower.strip().rstrip('!')
+
+            if folder_clean in meeting_lower or meeting_lower in folder_clean:
+                score += 10
+
+            # Check for partial word matches
+            folder_words = folder_clean.split()
+            for word in folder_words:
+                if len(word) > 3 and word in meeting_lower:
+                    score += 5
+
+        # Check list name match (for specific campaigns/projects)
+        list_lower = list_info['list_name'].lower()
+        list_clean = list_lower.strip()
+
+        # Check for specific campaign/project keywords in list name
+        # These get higher priority than generic lists
+        is_generic = list_clean in ['triage', 'admin', 'templates']
+
+        if not is_generic:
+            list_words = list_clean.split()
+            for word in list_words:
+                if len(word) > 2 and word in meeting_lower:
+                    # Higher score for specific campaign lists
+                    score += 7
+
+        # Penalize generic lists (Triage, Admin) unless no better match
+        if is_generic and score > 0:
+            score -= 2
+
+        if score > best_score:
+            best_score = score
+            best_match = list_info
+
+    # If we found a good match (score > 5), use it
+    if best_match and best_score > 5:
+        return {
+            'space_name': best_match['space_name'],
+            'folder_name': best_match['folder_name'],
+            'list_name': best_match['list_name'],
+            'list_id': best_match['list_id']
+        }
 
     # Default fallback - Operations list
     return {
