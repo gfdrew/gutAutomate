@@ -360,24 +360,6 @@ def get_meeting_notes_content(doc_url):
                         content.append(text_run['textRun']['content'])
 
         full_text = ''.join(content)
-
-        # Clean up Google Docs special characters and formatting artifacts
-        # These can cause issues with parsing and display
-        special_chars = [
-            '\u2610',  # ☐ Empty checkbox
-            '\u2611',  # ☑ Checked checkbox
-            '\u2612',  # ☒ Checked checkbox with X
-            '\ufffc',  # Object replacement character
-            '\u200b',  # Zero-width space
-            '\u200c',  # Zero-width non-joiner
-            '\u200d',  # Zero-width joiner
-            '\ufeff',  # Zero-width no-break space (BOM)
-            '\u00a0',  # Non-breaking space
-        ]
-
-        for char in special_chars:
-            full_text = full_text.replace(char, '')
-
         print(f"Successfully retrieved document content ({len(full_text)} characters)")
         return full_text
 
@@ -518,7 +500,6 @@ def extract_due_date(task_text, context="", meeting_date=None):
 def find_relevant_context(task_text, details_section, assignee=None):
     """
     Find relevant context from the Details section for a given task.
-    Includes timestamps from transcript if found.
 
     Args:
         task_text: The action item text
@@ -526,7 +507,7 @@ def find_relevant_context(task_text, details_section, assignee=None):
         assignee: The person assigned to the task
 
     Returns:
-        str: Relevant context paragraph(s) with timestamps or empty string
+        str: Relevant context paragraph(s) or empty string
     """
     if not details_section:
         return ""
@@ -543,8 +524,7 @@ def find_relevant_context(task_text, details_section, assignee=None):
     keywords = [
         'budget', 'shot list', 'production brief', 'graphic', 'outro card',
         'meeting', 'assets', 'deliverables', 'brand', 'references',
-        'total wine', 'bevmo', 'client', 'agency', 'location', 'tonight',
-        'monday', 'today', 'tomorrow', 'week', 'deadline', 'due'
+        'total wine', 'bevmo', 'client', 'agency', 'location'
     ]
 
     for keyword in keywords:
@@ -564,21 +544,16 @@ def find_relevant_context(task_text, details_section, assignee=None):
         score = sum(1 for term in key_terms if term in para_lower)
 
         if score > 0:
-            # Keep timestamps in the paragraph (format: 00:00:00 or (00:00:00))
-            # These are already in the text, so no need to extract separately
             scored_paragraphs.append((score, para.strip()))
 
     # Sort by score and take top matches
     scored_paragraphs.sort(reverse=True, key=lambda x: x[0])
 
     # Return top 1-2 most relevant paragraphs
-    # Timestamps are preserved in the original paragraph text
     relevant_context = []
     for score, para in scored_paragraphs[:2]:
         if score >= 1:  # At least one matching term
-            # Clean up the paragraph but keep timestamps
-            cleaned_para = para.replace('\n', ' ')  # Join multiline paragraphs
-            relevant_context.append(cleaned_para)
+            relevant_context.append(para)
 
     return "\n\n".join(relevant_context)
 
@@ -644,9 +619,8 @@ def resolve_assignee_email(name):
         if name_lower in map_name or map_name in name_lower:
             return email
 
-    # If no match found, return None (person not in assignee map)
-    # Task will be assigned to DEFAULT_ASSIGNEE instead
-    return None
+    # If no match found, return the original name (ClickUp will try to resolve it)
+    return name
 
 
 def shorten_task_name(task_text, assignee=None):
@@ -673,17 +647,14 @@ def shorten_task_name(task_text, assignee=None):
     shortened = original
 
     # Remove assignee name + "will" pattern at start
-    # Example: "Matt Rose will update..." → "update..."
     if assignee:
         assignee_pattern = rf'^{re.escape(assignee)}\s+will\s+'
         shortened = re.sub(assignee_pattern, '', shortened, flags=re.IGNORECASE)
 
     # Remove generic "will" patterns at start
-    # Example: "will update..." → "update..."
     shortened = re.sub(r'^(?:will|should|needs? to)\s+', '', shortened, flags=re.IGNORECASE)
 
     # Remove "Coordinate with [Name] to" and keep the action
-    # Example: "Coordinate with Aidan Wilde to create..." → "Create..."
     shortened = re.sub(r'^coordinate with [^t]+to\s+', '', shortened, flags=re.IGNORECASE)
 
     # Remove verbose phrases and filler words
@@ -713,7 +684,7 @@ def shorten_task_name(task_text, assignee=None):
     # Trim and clean up extra spaces
     shortened = ' '.join(shortened.split())
 
-    # If shortened version is too short or same as original, return original
+    # If shortened version is too short, return original
     if len(shortened) < 10:
         return original
 
@@ -789,32 +760,17 @@ def parse_action_items(notes_content, meeting_title="", debug=False):
             ignored_names = get_ignored_assignees()
 
             # Filter out ignored names (e.g., Ryan Joseph)
-            non_ignored_names = [name for name in all_names if name.lower() not in ignored_names]
+            assignees = [name for name in all_names if name.lower() not in ignored_names]
 
-            # Determine the assignee: prioritize people in ASSIGNEE_MAP
-            assignee = None
-            if non_ignored_names:
-                # Try to find someone in the ASSIGNEE_MAP first
-                for name in non_ignored_names:
-                    if resolve_assignee_email(name):
-                        # This person is in the map, assign to them
-                        assignee = name
-                        break
+            # Determine the assignee
+            if len(assignees) >= 1:
+                # Assign to first non-ignored person
+                assignee = assignees[0]
+            else:
+                # No valid assignees found (only ignored people mentioned or no one)
+                assignee = None
 
-                # If no one in the map was found, use first non-ignored person
-                # (they'll be marked as "Mentioned Assignee" later)
-                if not assignee:
-                    assignee = non_ignored_names[0]
-
-            # Clean up task text: remove checkboxes, bullet points, etc.
             task_text = line
-            # Remove checkbox symbols (☐ ☑ ✓ ✗ ☒ □ ■)
-            task_text = re.sub(r'^[☐☑✓✗☒□■]\s*', '', task_text)
-            # Remove bullet points (-, •, *, etc.)
-            task_text = re.sub(r'^[-•*]\s+', '', task_text)
-            # Remove numbered list markers (1., 2., etc.)
-            task_text = re.sub(r'^\d+\.\s+', '', task_text)
-            task_text = task_text.strip()
 
             # Shorten task name for cleaner ClickUp task titles
             task_name = shorten_task_name(task_text, assignee)
@@ -854,33 +810,11 @@ def parse_action_items(notes_content, meeting_title="", debug=False):
             matches = re.finditer(pattern, notes_content, re.IGNORECASE)
             for match in matches:
                 task_text = match.group(1).strip()
-
-                # Clean up task text: remove checkboxes, bullet points, etc.
-                task_text = re.sub(r'^[☐☑✓✗☒□■]\s*', '', task_text)
-                task_text = re.sub(r'^[-•*]\s+', '', task_text)
-                task_text = re.sub(r'^\d+\.\s+', '', task_text)
-                task_text = task_text.strip()
-
                 # Skip very short items or headers
                 if len(task_text) > 10 and not task_text.endswith(':'):
-                    # Extract all names mentioned
-                    full_names = re.findall(r'\b([A-Z][a-z]+(?: [A-Z][a-z]+)+)\b', task_text)
-                    single_names = re.findall(r'\b(drew|art|matt|kato|paula)\b', task_text, re.IGNORECASE)
-                    all_names = full_names + single_names
-
-                    # Filter out ignored names
-                    ignored_names = get_ignored_assignees()
-                    non_ignored_names = [name for name in all_names if name.lower() not in ignored_names]
-
-                    # Prioritize people in ASSIGNEE_MAP
-                    assignee = None
-                    if non_ignored_names:
-                        for name in non_ignored_names:
-                            if resolve_assignee_email(name):
-                                assignee = name
-                                break
-                        if not assignee:
-                            assignee = non_ignored_names[0]
+                    # Try to find assignee mentions
+                    assignee_match = re.search(r'@(\w+)|(\w+)\s+(?:will|should)', task_text)
+                    assignee = assignee_match.group(1) or assignee_match.group(2) if assignee_match else None
 
                     # Estimate priority based on keywords
                     priority = None
@@ -889,18 +823,10 @@ def parse_action_items(notes_content, meeting_title="", debug=False):
                     elif any(word in task_text.lower() for word in ['important', 'priority', 'high']):
                         priority = 'high'
 
-                    # Find relevant context from Details section
-                    context = find_relevant_context(task_text, details_section, assignee)
-
-                    # Extract due date from task text and context (using meeting date as reference)
-                    due_date_info = extract_due_date(task_text, context, meeting_date)
-
                     action_items.append({
                         'task': task_text,
                         'assignee': assignee,
-                        'priority': priority,
-                        'context': context,
-                        'due_date': due_date_info
+                        'priority': priority
                     })
 
     # Remove duplicates
@@ -940,18 +866,6 @@ def smart_destination_detection(meeting_title):
             'folder_name': 'BevMo',
             'list_name': 'Holiday CTV 2025',
             'list_id': '901112154120'
-        },
-        'gopuff': {
-            'space_name': 'Clients',
-            'folder_name': 'Gopuff',
-            'list_name': 'NYE',
-            'list_id': '901106184953'
-        },
-        'nye': {
-            'space_name': 'Clients',
-            'folder_name': 'Gopuff',
-            'list_name': 'NYE',
-            'list_id': '901106184953'
         },
         # Add more mappings as needed
     }
@@ -1065,19 +979,17 @@ def preview_all_meetings_for_approval(meetings_data):
         return []
 
 
-def preview_clickup_tasks(action_items, meeting_title, destination=None, claude_mode=False):
+def preview_clickup_tasks(action_items, meeting_title, destination=None):
     """
     Step 4: Preview what would be created in ClickUp (without actually creating).
-    In claude_mode, auto-confirms creation.
 
     Args:
         action_items: List of parsed action items
         meeting_title: Title of the meeting for context
         destination: Dict with space_name, list_name, list_id
-        claude_mode: If True, auto-confirm without prompting
 
     Returns:
-        bool: True if user confirms creation (or in claude_mode), False otherwise
+        bool: True if user confirms creation, False otherwise
     """
     print("\nStep 4: Preview of ClickUp Tasks to Create")
     print("=" * 60)
@@ -1102,11 +1014,10 @@ def preview_clickup_tasks(action_items, meeting_title, destination=None, claude_
     for i, item in enumerate(action_items, 1):
         print(f"Task {i}:")
         print(f"  Name: {item['task'][:80]}{'...' if len(item['task']) > 80 else ''}")
-        print(f"  Action Item: {item.get('original_task', item['task'])}")
+        print(f"  Action Item: {item['task']}")
 
-        # Build full description with context (use original_task if available)
-        original_text = item.get('original_task', item['task'])
-        description_parts = [f"**Action Item:** {original_text}", ""]
+        # Build full description with context
+        description_parts = [f"**Action Item:** {item['task']}", ""]
         if item.get('context'):
             description_parts.append("**Context from Meeting:**")
             description_parts.append(item['context'])
@@ -1121,19 +1032,10 @@ def preview_clickup_tasks(action_items, meeting_title, destination=None, claude_
             print(f"  {line}")
         print("  " + "-" * 58)
 
-        # Show who will actually be assigned (resolve through ASSIGNEE_MAP)
-        mentioned_assignee = item.get('assignee')
-        if mentioned_assignee:
-            resolved_email = resolve_assignee_email(mentioned_assignee)
-            if resolved_email:
-                print(f"\n  Assignee: {mentioned_assignee} ({resolved_email})")
-            else:
-                # Not in map, will use default
-                default_email = os.getenv('DEFAULT_ASSIGNEE', 'unassigned')
-                print(f"\n  Assignee: {default_email} (default, {mentioned_assignee} not in team map)")
+        if item.get('assignee'):
+            print(f"\n  Assignee: {item['assignee']}")
         else:
-            default_email = os.getenv('DEFAULT_ASSIGNEE', 'unassigned')
-            print(f"\n  Assignee: {default_email} (default)")
+            print(f"\n  Assignee: (unassigned)")
         print(f"  Priority: {item.get('priority', 'normal')}")
 
         # Show due date if found
@@ -1146,23 +1048,12 @@ def preview_clickup_tasks(action_items, meeting_title, destination=None, claude_
         print(f"  Tags: ['meeting-action-item', 'bevmo']")
         print("=" * 60)
 
-    # Ask for confirmation or auto-confirm in Claude mode
+    # Ask for confirmation
     print("\n" + "=" * 60)
     print(f"TOTAL: {len(action_items)} tasks ready to create")
     print("=" * 60)
-
-    if claude_mode:
-        # In claude mode, expect TASK_CONFIRMATION environment variable
-        import os
-        confirmation = os.environ.get('TASK_CONFIRMATION', '').strip().lower()
-        if confirmation == 'y' or confirmation == 'yes':
-            print("\n🤖 CLAUDE MODE: Task creation confirmed")
-            return True
-        else:
-            print("\n🤖 CLAUDE MODE: No TASK_CONFIRMATION, skipping task creation")
-            return False
-
     response = input("\nCreate these tasks in ClickUp? (y/n): ").strip().lower()
+
     return response == 'y'
 
 
@@ -1180,21 +1071,9 @@ def send_drew_notification(meeting_title, task_count, created_task_ids):
     """
     print("\nPreparing notification task for Drew...")
 
-    # Extract meeting name from title (remove quotes and date)
-    # Examples:
-    #   "BevMo Recurring StandUp" Oct 17, 2025 -> BevMo Recurring StandUp
-    #   Notes: "Gopuff NYE Team Sync" Oct 17, 2025 -> Gopuff NYE Team Sync
-    import re
-    meeting_name_match = re.search(r'"([^"]+)"', meeting_title)
-    if meeting_name_match:
-        meeting_name = meeting_name_match.group(1)
-    else:
-        # Fallback: use the whole title
-        meeting_name = meeting_title
-
     # Create a summary notification task
     notification_task = {
-        'name': f'✓ Automated {task_count} tasks from {meeting_name}',
+        'name': '🤖 gutAutomate in full effect',
         'markdown_description': f'''**gutAutomate successfully processed meeting notes!**
 
 **Meeting:** {meeting_title}
@@ -1248,50 +1127,6 @@ def get_clickup_api_token():
     return token if token else None
 
 
-# Cache for email to user ID mapping (to avoid repeated API calls)
-_email_to_id_cache = {}
-
-def resolve_email_to_clickup_id(email, api_token, workspace_id='2538614'):
-    """
-    Convert email address to ClickUp user ID by looking up workspace members.
-    Caches results to avoid repeated API calls.
-
-    Args:
-        email: Email address to resolve
-        api_token: ClickUp API token
-        workspace_id: ClickUp workspace/team ID
-
-    Returns:
-        int: ClickUp user ID or None if not found
-    """
-    # Check cache first
-    if email in _email_to_id_cache:
-        return _email_to_id_cache[email]
-
-    # Fetch workspace members if not cached
-    if not _email_to_id_cache:
-        try:
-            url = f"https://api.clickup.com/api/v2/team/{workspace_id}/user"
-            headers = {'Authorization': api_token}
-            response = requests.get(url, headers=headers)
-            response.raise_for_status()
-
-            members = response.json().get('members', [])
-            for member in members:
-                user = member.get('user', {})
-                user_email = user.get('email', '')
-                user_id = user.get('id')
-                if user_email and user_id:
-                    _email_to_id_cache[user_email.lower()] = user_id
-
-        except Exception as e:
-            print(f"Warning: Could not fetch workspace members: {e}")
-            return None
-
-    # Look up in cache
-    return _email_to_id_cache.get(email.lower())
-
-
 def create_clickup_task_via_api(task_data, api_token):
     """
     Create a single task in ClickUp using the REST API.
@@ -1322,15 +1157,7 @@ def create_clickup_task_via_api(task_data, api_token):
 
     # Add optional fields
     if task_data.get('assignees'):
-        # Convert email addresses to ClickUp user IDs for REST API
-        assignee_ids = []
-        for email in task_data['assignees']:
-            user_id = resolve_email_to_clickup_id(email, api_token)
-            if user_id:
-                assignee_ids.append(user_id)
-
-        if assignee_ids:
-            payload['assignees'] = assignee_ids
+        payload['assignees'] = task_data['assignees']
     if task_data.get('priority'):
         # Convert priority names to ClickUp values
         priority_map = {'urgent': 1, 'high': 2, 'normal': 3, 'low': 4}
@@ -1349,18 +1176,17 @@ def create_clickup_task_via_api(task_data, api_token):
         return None
 
 
-def create_clickup_tasks_via_mcp(action_items, destination, meeting_title, claude_mode=False):
+def create_clickup_tasks(action_items, destination, meeting_title):
     """
-    Step 5: Create tasks in ClickUp using MCP tools.
+    Step 5: Create tasks in ClickUp using the MCP tools.
 
     Args:
         action_items: List of parsed action items with context and due dates
         destination: Dict with list_id and other destination info
         meeting_title: Title of the meeting for context
-        claude_mode: If True, will call MCP tools via subprocess
 
     Returns:
-        dict: Results with 'created', 'failed', 'task_urls', and 'prepared_tasks'
+        dict: Results with 'created', 'failed', and 'task_urls'
     """
     print("\n" + "=" * 60)
     print("CREATING TASKS IN CLICKUP")
@@ -1368,102 +1194,48 @@ def create_clickup_tasks_via_mcp(action_items, destination, meeting_title, claud
 
     if not destination.get('list_id'):
         print("Error: No list_id specified in destination")
-        return {'created': 0, 'failed': len(action_items), 'task_urls': [], 'ready': False}
+        return {'created': 0, 'failed': len(action_items), 'task_urls': []}
+
+    results = {
+        'created': 0,
+        'failed': 0,
+        'task_urls': [],
+        'errors': []
+    }
 
     # Prepare tasks for bulk creation
     tasks_to_create = []
 
-    # Auto-detect meeting tags from title
-    meeting_tags = []
-    meeting_lower = meeting_title.lower()
-    if 'bevmo' in meeting_lower:
-        meeting_tags.append('bevmo')
-    elif 'total wine' in meeting_lower:
-        meeting_tags.append('total-wine')
-    elif 'vfx' in meeting_lower or 'visual effects' in meeting_lower:
-        meeting_tags.append('vfx')
-    # Add default tag
-    meeting_tags.append('meeting-action-item')
-
     for i, item in enumerate(action_items, 1):
         print(f"\nPreparing Task {i}/{len(action_items)}: {item['task'][:50]}...")
 
-        # Check if assignee is in our map
-        mentioned_assignee = item.get('assignee')
-        resolved_email = None
-        if mentioned_assignee:
-            resolved_email = resolve_assignee_email(mentioned_assignee)
-
-        # Build the task description with markdown formatting (use original_task in description)
-        original_text = item.get('original_task', item['task'])
+        # Build the task description with markdown formatting
         description_parts = [
-            f"**Action Item:** {original_text}",
-            ""
-        ]
-
-        # If assignee mentioned but not in map, add them to description
-        if mentioned_assignee and not resolved_email:
-            # Person not in assignee map, mention them in description
-            description_parts.append(f"**Mentioned Assignee:** {mentioned_assignee}")
-            description_parts.append("")
-
-        description_parts.extend([
+            f"**Action Item:** {item['task']}",
+            "",
             "**Context from Meeting:**",
             item.get('context', 'No additional context available'),
             "",
             f"**Source:** {meeting_title}"
-        ])
+        ]
 
         full_description = "\n".join(description_parts)
 
-        # Condense task name: remove assignee name and extra words
-        condensed_name = item['task']
-
-        # Remove assignee name from beginning (e.g., "Matt Rose will" -> "will")
-        if item.get('assignee'):
-            assignee_pattern = rf"^{re.escape(item['assignee'])}\s+(will|should|needs to|to|must|can)\s+"
-            condensed_name = re.sub(assignee_pattern, '', condensed_name, flags=re.IGNORECASE)
-
-        # Remove common prefixes
-        condensed_name = re.sub(r'^(will|should|needs to|need to|must|can)\s+', '', condensed_name, flags=re.IGNORECASE)
-
-        # Capitalize first letter
-        if condensed_name:
-            condensed_name = condensed_name[0].upper() + condensed_name[1:]
-
-        # Intelligently truncate if too long (at word/phrase boundaries)
-        if len(condensed_name) > 80:
-            # Try to break at natural boundaries (by/after/for/with/at/before)
-            truncate_at = 80
-            boundaries = [' by ', ' after ', ' for ', ' with ', ' at ', ' before ', ' and ', ' to ']
-
-            # Find the last boundary before position 80
-            best_pos = -1
-            for boundary in boundaries:
-                pos = condensed_name[:80].rfind(boundary)
-                if pos > best_pos and pos > 40:  # Don't truncate too early
-                    best_pos = pos
-
-            if best_pos > 40:
-                condensed_name = condensed_name[:best_pos]
-            else:
-                # No good boundary found, just truncate at last space before 80
-                last_space = condensed_name[:80].rfind(' ')
-                if last_space > 40:
-                    condensed_name = condensed_name[:last_space]
-                else:
-                    condensed_name = condensed_name[:80]
-
-        # Build task object for ClickUp MCP
+        # Build task object for ClickUp
         task_obj = {
-            'name': condensed_name,
+            'name': item['task'],
             'markdown_description': full_description,
-            'tags': meeting_tags
+            'tags': ['meeting-action-item', 'bevmo']
         }
 
-        # Use resolved email from earlier, or fall back to default
-        # (resolved_email was set when building description)
-        assignee_email = resolved_email if resolved_email else os.getenv('DEFAULT_ASSIGNEE')
+        # Resolve assignee: try parsed name first, fall back to default
+        assignee_email = None
+        if item.get('assignee'):
+            # Resolve the name to email using the mapping
+            assignee_email = resolve_assignee_email(item['assignee'])
+        else:
+            # No assignee mentioned, use default from .env
+            assignee_email = os.getenv('DEFAULT_ASSIGNEE')
 
         if assignee_email:
             task_obj['assignees'] = [assignee_email]
@@ -1474,83 +1246,35 @@ def create_clickup_tasks_via_mcp(action_items, destination, meeting_title, claud
 
         # Add due date if available
         if item.get('due_date') and item['due_date'].get('due_date_ms'):
-            # Store due_date based on mode:
-            # - MCP tools expect STRING
-            # - REST API expects INTEGER
-            try:
-                if claude_mode:
-                    # MCP tools need due_date as string
-                    task_obj['due_date'] = str(int(item['due_date']['due_date_ms']))
-                else:
-                    # REST API needs due_date as integer
-                    task_obj['due_date'] = int(item['due_date']['due_date_ms'])
-            except (ValueError, TypeError):
-                # If conversion fails, skip the due date
-                pass
+            # Convert milliseconds timestamp to string for ClickUp API
+            task_obj['due_date'] = str(item['due_date']['due_date_ms'])
 
         tasks_to_create.append(task_obj)
 
+    # NOTE: The actual ClickUp MCP calls will be made by Claude Code at runtime
+    # This function prepares the tasks and returns them for Claude Code to create
+    # Claude Code has access to MCP tools that can't be directly imported in Python
+
     print(f"\n✓ Prepared {len(tasks_to_create)} tasks for ClickUp creation")
     print(f"  List ID: {destination['list_id']}")
-    print(f"  Tags: {', '.join(meeting_tags)}")
 
-    # If in claude mode, actually create the tasks via MCP
-    if claude_mode:
-        print(f"\n🤖 CLAUDE MODE: Creating tasks via MCP...")
-
-        # Write tasks to a temp JSON file for MCP to read
-        import json
-        import tempfile
-
-        temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
-        mcp_payload = {
-            'list_id': destination['list_id'],
-            'tasks': tasks_to_create
-        }
-        json.dump(mcp_payload, temp_file)
-        temp_file.close()
-
-        print(f"  Task data written to: {temp_file.name}")
-        print(f"  Run this command via Claude Code:")
-        print(f"    mcp__clickup__clickup_create_bulk_tasks with list_id={destination['list_id']}")
-
-        return {
-            'prepared_tasks': tasks_to_create,
-            'temp_file': temp_file.name,
-            'destination': destination,
-            'ready': True,
-            'count': len(tasks_to_create),
-            'meeting_title': meeting_title,
-            'claude_mode': True
-        }
-    else:
-        # Standalone mode - just return the prepared tasks
-        return {
-            'prepared_tasks': tasks_to_create,
-            'destination': destination,
-            'ready': True,
-            'count': len(tasks_to_create),
-            'meeting_title': meeting_title,
-            'claude_mode': False
-        }
+    # Return the prepared tasks structure
+    # Claude Code will use this with: mcp__clickup__clickup_create_bulk_tasks
+    return {
+        'prepared_tasks': tasks_to_create,
+        'destination': destination,
+        'ready': True,
+        'count': len(tasks_to_create),
+        'meeting_title': meeting_title
+    }
 
 
-def create_clickup_tasks(action_items, destination, meeting_title):
-    """
-    Legacy wrapper for create_clickup_tasks_via_mcp.
-    Kept for backwards compatibility.
-    """
-    return create_clickup_tasks_via_mcp(action_items, destination, meeting_title, claude_mode=False)
-
-
-def prompt_for_meeting_approval(emails, claude_mode=False):
+def prompt_for_meeting_approval(emails):
     """
     Show list of meetings and prompt user to select which ones to process.
-    In claude_mode, auto-approves all meetings.
 
     Args:
         emails: List of email dicts with meeting info
-        claude_mode: If True, auto-approve all meetings without prompting
 
     Returns:
         list: Indices of emails approved for processing
@@ -1568,25 +1292,11 @@ def prompt_for_meeting_approval(emails, claude_mode=False):
         print()
 
     print(f"{'='*60}")
-
-    # Interactive mode - prompt user
     print("\nWhich meetings would you like to process?")
     print("  • Enter 'all' to process all meetings")
     print("  • Enter 'none' or 'skip' to skip all")
     print("  • Enter numbers (comma-separated, e.g., '1,2' or '2')")
-
-    if claude_mode:
-        # In claude mode, expect MEETING_SELECTION environment variable
-        import os
-        selection = os.environ.get('MEETING_SELECTION', '')
-        if not selection:
-            print("\n🤖 CLAUDE MODE: No MEETING_SELECTION environment variable found.")
-            print("   Expected format: 'all' or '1,2' or '2'")
-            return []
-        print(f"\n🤖 CLAUDE MODE: Using MEETING_SELECTION={selection}")
-        response = selection.strip().lower()
-    else:
-        response = input("\nYour choice: ").strip().lower()
+    response = input("\nYour choice: ").strip().lower()
 
     # Handle 'all' or 'y'
     if response in ['all', 'y', 'yes']:
@@ -1656,7 +1366,7 @@ Examples:
         print("\nNo meeting notes emails found to process.")
     else:
         # Step 1: Show all meetings and get approval BEFORE fetching content
-        approved_indices = prompt_for_meeting_approval(emails, claude_mode=claude_mode)
+        approved_indices = prompt_for_meeting_approval(emails)
 
         if not approved_indices:
             print("\n✗ No meetings approved for processing.")
@@ -1734,19 +1444,17 @@ Examples:
                     should_create = preview_clickup_tasks(
                         meeting['action_items'],
                         meeting['meeting_title'],
-                        meeting['destination'],
-                        claude_mode=claude_mode
+                        meeting['destination']
                     )
 
                     if should_create:
                         print("\n✓ User confirmed - Preparing tasks for creation...")
 
-                        # Prepare tasks for ClickUp (use MCP-aware version)
-                        result = create_clickup_tasks_via_mcp(
+                        # Prepare tasks for ClickUp
+                        result = create_clickup_tasks(
                             meeting['action_items'],
                             meeting['destination'],
-                            meeting['meeting_title'],
-                            claude_mode=claude_mode
+                            meeting['meeting_title']
                         )
 
                         if result.get('ready'):
@@ -1761,32 +1469,18 @@ Examples:
                             )
 
                             if claude_mode:
-                                import json
+                                print(f"\n🤖 CLAUDE MODE: Creating tasks in ClickUp...")
+                                print(f"\nClaude Code will now:")
+                                print(f"  1. Create {result['count']} tasks via mcp__clickup__clickup_create_bulk_tasks")
+                                print(f"  2. Send notification via mcp__clickup__clickup_create_task")
+                                print(f"\n⚠️  This requires running through Claude Code with MCP access.")
 
-                                print(f"\n🤖 CLAUDE MODE: Outputting JSON for Claude Code to process")
+                                # Store both for Claude Code to execute
+                                result['notification'] = notification
+                                result['claude_mode'] = True
 
-                                # Output JSON that Claude Code can parse
-                                output_data = {
-                                    'status': 'ready_for_mcp',
-                                    'meeting_title': meeting['meeting_title'],
-                                    'list_id': meeting['destination']['list_id'],
-                                    'destination': meeting['destination'],
-                                    'task_count': result['count'],
-                                    'prepared_tasks': result['prepared_tasks'],
-                                    'notification': {
-                                        'list_id': '901112235176',  # Automation Summaries
-                                        'name': notification['name'],
-                                        'markdown_description': notification['markdown_description'],
-                                        'assignees': notification.get('assignees', []),
-                                        'tags': notification.get('tags', [])
-                                    }
-                                }
-
-                                print("\n" + "=" * 60)
-                                print("JSON_OUTPUT_START")
-                                print(json.dumps(output_data, indent=2, default=str))
-                                print("JSON_OUTPUT_END")
-                                print("=" * 60)
+                                # In Claude mode, the script returns the data for Claude to process
+                                # Claude Code (with MCP access) would then create the tasks
                             else:
                                 print(f"\n📋 STANDALONE MODE: Creating tasks via ClickUp API...")
 
