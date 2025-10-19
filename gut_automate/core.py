@@ -2112,12 +2112,8 @@ def main(mode='auto'):
                                     if len(task_urls) > 5:
                                         print(f"  ... and {len(task_urls) - 5} more")
 
-                                # Mark email as read ONLY after successful processing
+                                # Record this meeting as processed (processing history is source of truth)
                                 if created_count > 0 or updated_count > 0:
-                                    print(f"\n✓ Marking email as read...")
-                                    mark_emails_as_read([meeting['email_id']])
-
-                                    # Record this meeting as processed
                                     from gut_automate.duplicate_detection import record_processed_meeting
                                     tasks_created_records = [
                                         {
@@ -2134,9 +2130,10 @@ def main(mode='auto'):
                                         email_id=meeting['email_id'],
                                         tasks_created=tasks_created_records
                                     )
-                                    print(f"✓ Recorded meeting as processed")
+                                    print(f"\n✓ Recorded meeting as processed in history database")
+                                    print(f"   (Email left unread - you can mark it read when you're done with it)")
                                 else:
-                                    print(f"\n⚠️  No tasks created/updated - email NOT marked as read")
+                                    print(f"\n⚠️  No tasks created/updated - meeting NOT recorded as processed")
                         else:
                             print("\n✗ Failed to prepare tasks")
                     else:
