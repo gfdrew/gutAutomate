@@ -1,0 +1,226 @@
+{
+  "version": "2.0",
+  "last_updated": "2025-10-19",
+  "patterns": {
+    "meeting_level": {
+      "title_patterns": {
+        "chad drew rose standup": {
+          "likely_projects": [
+            {
+              "folder_name": "Block",
+              "list_name": "Bitkey & Natalie Brunell",
+              "list_id": "901111971274",
+              "probability": 0.7
+            }
+          ],
+          "confidence": 0.6,
+          "signal_strength": "weak",
+          "learned_from": "manual_correction",
+          "examples": [
+            {
+              "meeting_title": "Chad : Drew : Rose 15 min stand up",
+              "date": "2025-10-17",
+              "context": "deliverables, overlay test, packaging",
+              "actual_projects": ["Block", "BevMo", "Mike's Hot Honey", "Gopuff", "Operations"]
+            }
+          ],
+          "notes": "Multi-project standup - Bitkey tasks are common but not exclusive"
+        },
+        "stand up": {
+          "likely_projects": [
+            {
+              "folder_name": "Gopuff",
+              "list_name": "NYE RR + WK",
+              "list_id": "901106186673",
+              "probability": 0.4
+            },
+            {
+              "folder_name": "Block",
+              "list_name": "Bitkey & Natalie Brunell",
+              "list_id": "901111971274",
+              "probability": 0.3
+            }
+          ],
+          "confidence": 0.5,
+          "signal_strength": "weak",
+          "learned_from": "observation",
+          "notes": "Generic standups typically span multiple projects - use task-level patterns instead"
+        }
+      },
+      "participant_patterns": {
+        "chad+drew+rose": {
+          "likely_projects": [
+            {
+              "folder_name": "Block",
+              "list_name": "Bitkey & Natalie Brunell",
+              "list_id": "901111971274",
+              "probability": 0.7
+            }
+          ],
+          "confidence": 0.6,
+          "signal_strength": "weak",
+          "learned_from": "manual_correction",
+          "notes": "These three often discuss Bitkey but can discuss other projects too"
+        }
+      }
+    },
+    "task_level": {
+      "keyword_patterns": {
+        "overlay test": {
+          "destination": {
+            "folder_name": "Block",
+            "list_name": "Bitkey & Natalie Brunell",
+            "list_id": "901111971274"
+          },
+          "confidence": 0.95,
+          "signal_strength": "strong",
+          "learned_from": "context_analysis",
+          "notes": "Overlay tests are specific to Bitkey deliverables"
+        },
+        "production brief": {
+          "context_required": ["bevmo", "bev mo"],
+          "destination": {
+            "folder_name": "BevMo",
+            "list_name": "Holiday CTV 2025",
+            "list_id": "901112154120"
+          },
+          "confidence": 0.90,
+          "signal_strength": "strong",
+          "learned_from": "manual_correction",
+          "notes": "Production brief in BevMo context"
+        },
+        "packaging": {
+          "destination": {
+            "folder_name": "Block",
+            "list_name": "Bitkey & Natalie Brunell",
+            "list_id": "901111971274"
+          },
+          "confidence": 0.85,
+          "signal_strength": "medium",
+          "learned_from": "context_analysis",
+          "notes": "Packaging work typically refers to Bitkey physical product"
+        }
+      },
+      "person_patterns": {
+        "art okoro": {
+          "likely_projects": [
+            {
+              "folder_name": "BevMo",
+              "list_name": "Holiday CTV 2025",
+              "list_id": "901112154120",
+              "probability": 0.5
+            },
+            {
+              "folder_name": "Block",
+              "list_name": "Bitkey & Natalie Brunell",
+              "list_id": "901111971274",
+              "probability": 0.3
+            }
+          ],
+          "confidence": 0.65,
+          "signal_strength": "medium",
+          "learned_from": "observation",
+          "notes": "Art works across multiple projects - context matters"
+        }
+      },
+      "project_aliases": {
+        "bit key": {
+          "destination": {
+            "folder_name": "Block",
+            "list_name": "Bitkey & Natalie Brunell",
+            "list_id": "901111971274"
+          },
+          "confidence": 0.95,
+          "signal_strength": "strong"
+        },
+        "bitkey": {
+          "destination": {
+            "folder_name": "Block",
+            "list_name": "Bitkey & Natalie Brunell",
+            "list_id": "901111971274"
+          },
+          "confidence": 0.95,
+          "signal_strength": "strong"
+        },
+        "natalie brunell": {
+          "destination": {
+            "folder_name": "Block",
+            "list_name": "Bitkey & Natalie Brunell",
+            "list_id": "901111971274"
+          },
+          "confidence": 0.90,
+          "signal_strength": "strong"
+        },
+        "go puff": {
+          "destination": {
+            "folder_name": "Gopuff",
+            "list_name": "NYE RR + WK",
+            "list_id": "901106186673"
+          },
+          "confidence": 0.95,
+          "signal_strength": "strong"
+        },
+        "gopuff": {
+          "destination": {
+            "folder_name": "Gopuff",
+            "list_name": "NYE RR + WK",
+            "list_id": "901106186673"
+          },
+          "confidence": 0.95,
+          "signal_strength": "strong"
+        },
+        "new year's eve": {
+          "destination": {
+            "folder_name": "Gopuff",
+            "list_name": "NYE RR + WK",
+            "list_id": "901106186673"
+          },
+          "confidence": 0.85,
+          "signal_strength": "medium"
+        },
+        "nye": {
+          "destination": {
+            "folder_name": "Gopuff",
+            "list_name": "NYE RR + WK",
+            "list_id": "901106186673"
+          },
+          "confidence": 0.85,
+          "signal_strength": "medium"
+        },
+        "mike's hot honey": {
+          "destination": {
+            "folder_name": "Mike's Hot Honey",
+            "list_name": "MMB1",
+            "list_id": "901104679599"
+          },
+          "confidence": 0.95,
+          "signal_strength": "strong"
+        },
+        "bevmo": {
+          "destination": {
+            "folder_name": "BevMo",
+            "list_name": "Holiday CTV 2025",
+            "list_id": "901112154120"
+          },
+          "confidence": 0.95,
+          "signal_strength": "strong"
+        },
+        "bev mo": {
+          "destination": {
+            "folder_name": "BevMo",
+            "list_name": "Holiday CTV 2025",
+            "list_id": "901112154120"
+          },
+          "confidence": 0.95,
+          "signal_strength": "strong"
+        }
+      }
+    }
+  },
+  "statistics": {
+    "total_patterns_learned": 12,
+    "successful_applications": 0,
+    "corrections_applied": 2,
+    "accuracy_improvement": "pending"
+  }
+}
