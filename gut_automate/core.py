@@ -23,10 +23,113 @@ from googleapiclient.errors import HttpError
 from dotenv import load_dotenv
 
 # Get the directory where this script is located
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Load environment variables from .env file
 load_dotenv(os.path.join(SCRIPT_DIR, '.env'))
+
+# Global API usage tracking
+API_USAGE = {
+    'input_tokens': 0,
+    'output_tokens': 0,
+    'api_calls': 0
+}
+
+# Check if we're in batch mode (non-interactive)
+BATCH_MODE = os.getenv('BATCH_MODE', 'false').lower() == 'true'
+
+def get_user_input(prompt, default='y'):
+    """
+    Get user input or return default if in batch mode.
+
+    Args:
+        prompt: The prompt to display to the user
+        default: The default value to return in batch mode
+
+    Returns:
+        User input string or default value
+    """
+    if BATCH_MODE:
+        print(f"{prompt} [BATCH MODE: auto-selecting '{default}']")
+        return default
+    return input(prompt).strip()
+
+
+def prompt_duplicate_action(new_task, existing_task, similarity, changes):
+    """
+    Prompt user for action when duplicate task is found.
+
+    Args:
+        new_task: The new task dict
+        existing_task: The existing task from ClickUp
+        similarity: Similarity score (0.0 to 1.0)
+        changes: Dict from compare_tasks()
+
+    Returns:
+        str: 'skip', 'update', or 'create'
+    """
+    from gut_automate.duplicate_detection import format_changes_summary, get_task_url
+
+    print("\n" + "="*70)
+    print("⚠️  POTENTIAL DUPLICATE DETECTED")
+    print("="*70)
+
+    print(f"\n📋 Existing Task ({int(similarity*100)}% match):")
+    print(f"   Name: {existing_task.get('name', 'Unknown')}")
+    print(f"   ID: {existing_task.get('id')}")
+    print(f"   URL: {get_task_url(existing_task.get('id'))}")
+    print(f"   Status: {existing_task.get('status', {}).get('status', 'Unknown')}")
+
+    assignees = existing_task.get('assignees', [])
+    if assignees:
+        assignee_names = [a.get('username', 'Unknown') for a in assignees]
+        print(f"   Assignees: {', '.join(assignee_names)}")
+
+    due_date = existing_task.get('due_date')
+    if due_date:
+        print(f"   Due Date: {due_date}")
+
+    print(f"\n🆕 New Task:")
+    print(f"   Name: {new_task.get('name', 'Unknown')}")
+
+    new_assignees = new_task.get('assignees', [])
+    if new_assignees:
+        print(f"   Assignees: {', '.join(new_assignees)}")
+
+    new_due = new_task.get('due_date')
+    if new_due:
+        print(f"   Due Date: {new_due}")
+
+    # Show changes if any
+    if changes.get('has_changes'):
+        print(f"\n📝 Detected Changes:")
+        print(f"   {format_changes_summary(changes)}")
+
+    # Auto-skip if no changes detected (exact duplicate)
+    if not changes.get('has_changes'):
+        print("\n[AUTO-SKIP: Exact duplicate with no changes detected]")
+        return 'skip'
+
+    # If there are changes, ask the user what to do
+    print("\n" + "="*70)
+    print("What would you like to do?")
+    print("  1) Skip - Don't create (task already exists)")
+    print("  2) Update - Update existing task with new information")
+    print("  3) Create - Create new task anyway (ignore duplicate)")
+    print("="*70)
+
+    choice = input("\nYour choice (1/2/3): ").strip()
+
+    if choice == '1':
+        return 'skip'
+    elif choice == '2':
+        return 'update'
+    elif choice == '3':
+        return 'create'
+    else:
+        print("Invalid choice. Defaulting to 'skip'.")
+        return 'skip'
+
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = [
@@ -454,7 +557,7 @@ def extract_due_date(task_text, context="", meeting_date=None):
 
     Returns:
         dict: Contains 'date_string' (human readable) and 'due_date_ms' (timestamp in ms)
-              Returns None if no date can be inferred
+              Defaults to meeting_date if no date can be inferred from text
     """
     from datetime import datetime, timedelta
     import calendar
@@ -503,7 +606,16 @@ def extract_due_date(task_text, context="", meeting_date=None):
                 'date_obj': due_date
             }
 
-    return None
+    # No date pattern found - default to meeting date (or reference date)
+    due_date = reference_date
+    due_date_ms = int(due_date.timestamp() * 1000)
+    date_string = due_date.strftime("%B %d, %Y")
+
+    return {
+        'date_string': date_string,
+        'due_date_ms': due_date_ms,
+        'date_obj': due_date
+    }
 
 
 def find_relevant_context(task_text, details_section, assignee=None):
@@ -640,6 +752,82 @@ def resolve_assignee_email(name):
     return None
 
 
+def shorten_task_name(task_text, assignee=None):
+    """
+    Shorten task name by removing redundant information and verbose phrasing.
+
+    Format pattern:
+    - Remove "Person will" prefix (assignee already shown in ClickUp)
+    - Start with action verb (Update, Ask, Create, Coordinate, Research, Test, Design, Shoot, etc.)
+    - Keep key details (what/why)
+    - Remove unnecessary filler words
+
+    Args:
+        task_text: Original task text from meeting notes
+        assignee: Person assigned (used to remove their name from task)
+
+    Returns:
+        str: Shortened task name
+    """
+    import re
+
+    # Original text for reference
+    original = task_text.strip()
+
+    # Remove Unicode private use area characters (like \ue907)
+    # These can come from copy-paste or certain text processing
+    original = re.sub(r'[\ue000-\uf8ff]', '', original)
+
+    shortened = original
+
+    # Remove assignee name + "will" pattern at start
+    # Example: "Matt Rose will update..." → "update..."
+    if assignee:
+        assignee_pattern = rf'^{re.escape(assignee)}\s+will\s+'
+        shortened = re.sub(assignee_pattern, '', shortened, flags=re.IGNORECASE)
+
+    # Remove generic "will" patterns at start
+    # Example: "will update..." → "update..."
+    shortened = re.sub(r'^(?:will|should|needs? to)\s+', '', shortened, flags=re.IGNORECASE)
+
+    # Remove "Coordinate with [Name] to" and keep the action
+    # Example: "Coordinate with Aidan Wilde to create..." → "Create..."
+    shortened = re.sub(r'^coordinate with [^t]+to\s+', '', shortened, flags=re.IGNORECASE)
+
+    # Remove verbose phrases and filler words
+    replacements = {
+        r'\s+separately\s+': ' ',
+        r'\s+for anything that was missed during the call\s*': '',
+        r'\s+and circulate it for review\s*': ' and circulate',
+        r'to see if they are open to': 'about',
+        r'45-second or 1-minute': '45-60 sec',
+        r'will aim to': '',
+        r'the exact\s+': '',
+        r'\s+being used': '',
+        r'\s+to make sure it is good': '',
+        r'\s+and drop the screenshots of the AI test with the transition into Slack': '',
+        r'\s+to help with pacing': ' for pacing',
+        r'\s+for the script': '',
+        r'recreating each scene with a DIY version\s+': '',
+    }
+
+    for pattern, replacement in replacements.items():
+        shortened = re.sub(pattern, replacement, shortened, flags=re.IGNORECASE)
+
+    # Capitalize first letter
+    if shortened:
+        shortened = shortened[0].upper() + shortened[1:]
+
+    # Trim and clean up extra spaces
+    shortened = ' '.join(shortened.split())
+
+    # If shortened version is too short or same as original, return original
+    if len(shortened) < 10:
+        return original
+
+    return shortened
+
+
 def parse_action_items(notes_content, meeting_title="", debug=False):
     """
     Step 3: Parse meeting notes and extract action items.
@@ -657,6 +845,62 @@ def parse_action_items(notes_content, meeting_title="", debug=False):
     """
     print("\nStep 3: Parsing action items from meeting notes...")
     print("=" * 60)
+
+    # Try Claude API first if available
+    try:
+        from gut_automate.claude_parser import parse_with_claude
+        claude_result = parse_with_claude(notes_content, meeting_title)
+        if claude_result:
+            # Track API usage
+            API_USAGE['input_tokens'] += claude_result['usage']['input_tokens']
+            API_USAGE['output_tokens'] += claude_result['usage']['output_tokens']
+            API_USAGE['api_calls'] += 1
+
+            claude_items = claude_result['action_items']
+            print(f"Found {len(claude_items)} potential action item(s) via Claude API")
+            # Convert Claude format to our format and add due dates
+            meeting_date = extract_meeting_date(meeting_title) if meeting_title else None
+            processed_items = []
+            for item in claude_items:
+                # Enhance context with project name if provided
+                context = item.get('context', '')
+                project = item.get('project', '')
+                if project and project not in context:
+                    context = f"{project}: {context}"
+
+                task_text = item.get('task', '')
+
+                processed_item = {
+                    'task': task_text,
+                    'assignee': item.get('assignee'),
+                    'priority': item.get('priority', 'normal'),
+                    'context': context,
+                    'original_task': task_text
+                }
+                # Parse due date from text or use meeting date
+                due_date_info = extract_due_date(
+                    item.get('due_date_text', ''),
+                    '',  # context
+                    meeting_date
+                )
+                if due_date_info:
+                    processed_item['due_date'] = due_date_info
+
+                # Detect destination for this specific task (same as regex path)
+                task_destination = smart_destination_detection(
+                    meeting_title or "",
+                    task_text,
+                    context
+                )
+                processed_item['destination'] = task_destination
+
+                processed_items.append(processed_item)
+            return processed_items
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"⚠️  Claude API parsing failed: {e}")
+        print("   Falling back to regex parsing")
 
     if debug:
         show_meeting_notes_content(notes_content)
@@ -728,14 +972,16 @@ def parse_action_items(notes_content, meeting_title="", debug=False):
 
             # Clean up task text: remove checkboxes, bullet points, etc.
             task_text = line
-            # Remove checkbox symbols - handle both start and mid-text positions
-            # Common checkbox characters: ☐ ☑ ✓ ✗ ☒ □ ■ ✔ ❏ ❐ ⬜ ▪ ▫
-            task_text = re.sub(r'[☐☑✓✗☒□■✔❏❐⬜▪▫]\s*', '', task_text)
-            # Remove bullet points (-, •, *, etc.) at start
+            # Remove checkbox symbols (☐ ☑ ✓ ✗ ☒ □ ■)
+            task_text = re.sub(r'^[☐☑✓✗☒□■]\s*', '', task_text)
+            # Remove bullet points (-, •, *, etc.)
             task_text = re.sub(r'^[-•*]\s+', '', task_text)
-            # Remove numbered list markers (1., 2., etc.) at start
+            # Remove numbered list markers (1., 2., etc.)
             task_text = re.sub(r'^\d+\.\s+', '', task_text)
             task_text = task_text.strip()
+
+            # Shorten task name for cleaner ClickUp task titles
+            task_name = shorten_task_name(task_text, assignee)
 
             # Estimate priority based on keywords
             priority = None
@@ -750,12 +996,21 @@ def parse_action_items(notes_content, meeting_title="", debug=False):
             # Extract due date from task text and context (using meeting date as reference)
             due_date_info = extract_due_date(task_text, context, meeting_date)
 
+            # Detect destination for this specific task
+            task_destination = smart_destination_detection(
+                meeting_title or "",
+                task_text,
+                context
+            )
+
             action_items.append({
-                'task': task_text,
+                'task': task_name,  # Use shortened name
+                'original_task': task_text,  # Keep original for description
                 'assignee': assignee,
                 'priority': priority,
                 'context': context,
-                'due_date': due_date_info
+                'due_date': due_date_info,
+                'destination': task_destination
             })
 
     # If no next steps section found, try general patterns
@@ -832,172 +1087,284 @@ def parse_action_items(notes_content, meeting_title="", debug=False):
     return unique_items
 
 
-def get_workspace_list_index():
+def get_folder_lists(folder_id, api_token):
     """
-    Build an index of all lists in the workspace with their full hierarchy.
-    This is cached for performance.
+    Fetch all lists within a ClickUp folder.
+
+    Args:
+        folder_id: The folder ID to fetch lists from
+        api_token: ClickUp API token
 
     Returns:
-        list: List of dicts with space_name, folder_name, list_name, list_id
+        list: List of dicts with list info (id, name, date_updated)
     """
-    # Hardcoded index from workspace hierarchy (updated: 2025-10-18)
-    # To refresh: Use mcp__clickup__clickup_get_workspace_hierarchy
-    return [
-        # Executive Assistant Space
-        {'space_name': 'Executive Assistant', 'folder_name': None, 'list_name': '📋 Internal Requests', 'list_id': '901102879966'},
-        {'space_name': 'Executive Assistant', 'folder_name': None, 'list_name': '📋 External Requests', 'list_id': '901102885711'},
-        {'space_name': 'Executive Assistant', 'folder_name': None, 'list_name': 'Action Items 2', 'list_id': '901103315630'},
-        {'space_name': 'Executive Assistant', 'folder_name': None, 'list_name': 'Action Items  1', 'list_id': '901103322623'},
+    try:
+        url = f"https://api.clickup.com/api/v2/folder/{folder_id}/list"
+        headers = {'Authorization': api_token}
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
 
-        # Clients Space - Gut Feeling Folder
-        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'MM Leads', 'list_id': '901110422131'},
-        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'Gut Feeling Triage', 'list_id': '901109584015'},
-        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'Leadership Meeting Topics', 'list_id': '901108467134'},
-        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'Operations', 'list_id': '901104934665'},
-        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'Client Acquisition', 'list_id': '901108236016'},
-        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'Financials', 'list_id': '901105030499'},
-        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'MicroCast', 'list_id': '901109757652'},
-        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'Talent Acquisition', 'list_id': '901109700733'},
-        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'Community Mgmt', 'list_id': '901109700881'},
-        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'New Services Dev', 'list_id': '901109700922'},
-        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'IT Support', 'list_id': '901110006262'},
-        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'Backlog: Website', 'list_id': '901109316657'},
-        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'Backlog: Company Decks', 'list_id': '901109322405'},
-        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'LA Rooftop', 'list_id': '901111008322'},
-        {'space_name': 'Clients', 'folder_name': 'Gut Feeling', 'list_name': 'Automation Summaries', 'list_id': '901112235176'},
-
-        # Clients Space - Other Client Folders
-        {'space_name': 'Clients', 'folder_name': 'H&S', 'list_name': 'H&S Triage', 'list_id': '901109583957'},
-        {'space_name': 'Clients', 'folder_name': 'H&S', 'list_name': 'H&S Admin', 'list_id': '901109586328'},
-        {'space_name': 'Clients', 'folder_name': 'EyeSight', 'list_name': 'EyeSight Triage', 'list_id': '901109583978'},
-        {'space_name': 'Clients', 'folder_name': 'EyeSight', 'list_name': 'EyeSight Admin', 'list_id': '901109586375'},
-        {'space_name': 'Clients', 'folder_name': 'EyeSight', 'list_name': 'Solomon Shoes', 'list_id': '901111756808'},
-        {'space_name': 'Clients', 'folder_name': 'Wasserman', 'list_name': 'Wasserman Triage', 'list_id': '901109583990'},
-        {'space_name': 'Clients', 'folder_name': 'Wasserman', 'list_name': 'Wasserman Admin', 'list_id': '901109586392'},
-        {'space_name': 'Clients', 'folder_name': 'Block', 'list_name': 'Block Triage', 'list_id': '901110683984'},
-        {'space_name': 'Clients', 'folder_name': 'Block', 'list_name': 'Block Admin', 'list_id': '901110683983'},
-        {'space_name': 'Clients', 'folder_name': 'Block', 'list_name': 'Bitkey & Natalie Brunell', 'list_id': '901111971274'},
-        {'space_name': 'Clients', 'folder_name': 'Little Marketing Shop', 'list_name': 'Triage', 'list_id': '901110886776'},
-        {'space_name': 'Clients', 'folder_name': 'Little Marketing Shop', 'list_name': 'Admin', 'list_id': '901110886777'},
-        {'space_name': 'Clients', 'folder_name': 'Little Marketing Shop', 'list_name': 'Gimme Seaweed — Campaign', 'list_id': '901110886778'},
-        {'space_name': 'Clients', 'folder_name': 'Little Marketing Shop', 'list_name': 'OoMee — Founder Shoot', 'list_id': '901111045472'},
-        {'space_name': 'Clients', 'folder_name': 'Little Marketing Shop', 'list_name': 'Gimmee UGC Post Pro', 'list_id': '901111667678'},
-        {'space_name': 'Clients', 'folder_name': 'Meta', 'list_name': 'Meta Triage', 'list_id': '901109583995'},
-        {'space_name': 'Clients', 'folder_name': 'Meta', 'list_name': 'Meta Admin', 'list_id': '901109586409'},
-        {'space_name': 'Clients', 'folder_name': 'Meta', 'list_name': 'CFO: Paige Bueckers & Azzi Fudd', 'list_id': '901111103200'},
-        {'space_name': 'Clients', 'folder_name': 'Meta', 'list_name': 'CFO: Summer I Turned Pretty Season Finale', 'list_id': '901111103203'},
-        {'space_name': 'Clients', 'folder_name': 'Meta', 'list_name': 'CFO: TC + Knicks Post', 'list_id': '901111755362'},
-        {'space_name': 'Clients', 'folder_name': 'Red Cross', 'list_name': 'Red Cross Triage', 'list_id': '901109909812'},
-        {'space_name': 'Clients', 'folder_name': 'Red Cross', 'list_name': 'Red Cross Admin', 'list_id': '901109909811'},
-        {'space_name': 'Clients', 'folder_name': 'Red Cross', 'list_name': 'Red Cross: Sept 6 Blood Drive In The Bronx', 'list_id': '901111080010'},
-        {'space_name': 'Clients', 'folder_name': 'Red Cross', 'list_name': 'Blood Drive In The Bronx', 'list_id': '901111120161'},
-        {'space_name': 'Clients', 'folder_name': 'Shopify', 'list_name': 'Triage', 'list_id': '901111054771'},
-        {'space_name': 'Clients', 'folder_name': 'Shopify', 'list_name': 'Admin', 'list_id': '901111054772'},
-        {'space_name': 'Clients', 'folder_name': 'Gopuff', 'list_name': 'Triage', 'list_id': '901111841330'},
-        {'space_name': 'Clients', 'folder_name': 'Gopuff', 'list_name': 'Admin', 'list_id': '901111841329'},
-        {'space_name': 'Clients', 'folder_name': 'Gopuff', 'list_name': 'NYE RR + WK', 'list_id': '901111841331'},
-        {'space_name': 'Clients', 'folder_name': 'Nysonian', 'list_name': 'Triage', 'list_id': '901111924758'},
-        {'space_name': 'Clients', 'folder_name': 'Nysonian', 'list_name': 'Admin', 'list_id': '901111924757'},
-        {'space_name': 'Clients', 'folder_name': 'Nysonian', 'list_name': 'NOBL Q4', 'list_id': '901111924759'},
-        {'space_name': 'Clients', 'folder_name': 'BevMo', 'list_name': 'Triage', 'list_id': '901112154119'},
-        {'space_name': 'Clients', 'folder_name': 'BevMo', 'list_name': 'Admin', 'list_id': '901112154117'},
-        {'space_name': 'Clients', 'folder_name': 'BevMo', 'list_name': 'Holiday CTV 2025', 'list_id': '901112154120'},
-        {'space_name': 'Clients', 'folder_name': "Mike's Hot Honey", 'list_name': 'Triage', 'list_id': '901112223783'},
-        {'space_name': 'Clients', 'folder_name': "Mike's Hot Honey", 'list_name': 'Admin', 'list_id': '901112223782'},
-        {'space_name': 'Clients', 'folder_name': "Mike's Hot Honey", 'list_name': 'MMB1', 'list_id': '901112223784'},
-
-        # Resources Space
-        {'space_name': 'Resources', 'folder_name': 'List Templates', 'list_name': 'Project Template', 'list_id': '901111083116'},
-        {'space_name': 'Resources', 'folder_name': 'List Templates', 'list_name': '[Client]-MMB#', 'list_id': '901109558046'},
-        {'space_name': 'Resources', 'folder_name': 'List Templates', 'list_name': 'Templates', 'list_id': '901103709290'},
-        {'space_name': 'Resources', 'folder_name': '[New Client Name]', 'list_name': 'Onboarding', 'list_id': '901103680855'},
-        {'space_name': 'Resources', 'folder_name': '[New Client Name]', 'list_name': '[Client] Triage', 'list_id': '901109569909'},
-        {'space_name': 'Resources', 'folder_name': '[New Client Name]', 'list_name': '[Client] Admin', 'list_id': '901109569964'},
-        {'space_name': 'Resources', 'folder_name': 'New Client Setup Template', 'list_name': 'Triage', 'list_id': '901111101466'},
-        {'space_name': 'Resources', 'folder_name': 'New Client Setup Template', 'list_name': 'Admin', 'list_id': '901111101465'},
-        {'space_name': 'Resources', 'folder_name': None, 'list_name': 'Wiki', 'list_id': '901103713682'},
-        {'space_name': 'Resources', 'folder_name': None, 'list_name': 'Process Needs', 'list_id': '901103716628'},
-        {'space_name': 'Resources', 'folder_name': None, 'list_name': 'Internal Onboarding', 'list_id': '901103773485'},
-        {'space_name': 'Resources', 'folder_name': None, 'list_name': 'Team Onboarding', 'list_id': '901103773568'},
-        {'space_name': 'Resources', 'folder_name': None, 'list_name': 'Tools', 'list_id': '901103812163'},
-        {'space_name': 'Resources', 'folder_name': None, 'list_name': 'Guest List', 'list_id': '901105692646'},
-
-        # Talent Center Space
-        {'space_name': 'Talent Center', 'folder_name': None, 'list_name': 'Contractors', 'list_id': '901103813246'},
-        {'space_name': 'Talent Center', 'folder_name': None, 'list_name': 'Casting Database', 'list_id': '901103914715'},
-        {'space_name': 'Talent Center', 'folder_name': None, 'list_name': 'Location Database', 'list_id': '901103967580'},
-    ]
+        lists = response.json().get('lists', [])
+        return [{
+            'id': lst['id'],
+            'name': lst['name'],
+            'date_updated': lst.get('date_updated', 0)
+        } for lst in lists]
+    except Exception as e:
+        print(f"Warning: Could not fetch lists for folder {folder_id}: {e}")
+        return []
 
 
-def smart_destination_detection(meeting_title):
+def select_best_list_for_task(lists, task_text, context, meeting_title, primary_list_name=None):
     """
-    Automatically detect the appropriate ClickUp destination based on meeting title.
-    Uses fuzzy matching against all workspace lists.
+    Use Claude API to intelligently select the best list for a task.
+    Falls back to primary list or most recent if Claude has low confidence.
+
+    Args:
+        lists: List of available lists with id, name, date_updated
+        task_text: The task description
+        context: Task context
+        meeting_title: Meeting title
+        primary_list_name: Preferred primary list name (fallback)
+
+    Returns:
+        dict: Selected list with id, name, and confidence level
+    """
+    if not lists:
+        return None
+
+    if len(lists) == 1:
+        return lists[0]
+
+    # Try Claude API for intelligent selection
+    try:
+        from gut_automate.claude_parser import Anthropic
+        import os
+
+        api_key = os.getenv('ANTHROPIC_API_KEY')
+        if not api_key:
+            # Fall back to primary or most recent
+            if primary_list_name:
+                for lst in lists:
+                    if lst['name'] == primary_list_name:
+                        return lst
+            return max(lists, key=lambda x: x['date_updated'])
+
+        client = Anthropic(api_key=api_key)
+
+        list_options = "\n".join([f"- {lst['name']}" for lst in lists])
+
+        prompt = f"""You are helping route a task to the correct project list in ClickUp.
+
+Task: {task_text}
+Context: {context}
+Meeting: {meeting_title}
+
+Available lists for this client:
+{list_options}
+
+Analyze which list is the best fit for this task. Reply in this format:
+LIST_NAME
+CONFIDENCE: high/medium/low
+
+Only reply with those two lines, nothing else."""
+
+        message = client.messages.create(
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=100,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        # Track API usage
+        usage = message.usage
+        API_USAGE['input_tokens'] += usage.input_tokens
+        API_USAGE['output_tokens'] += usage.output_tokens
+        API_USAGE['api_calls'] += 1
+
+        response = message.content[0].text.strip()
+        lines = response.split('\n')
+
+        selected_name = lines[0].strip()
+        confidence = 'low'
+
+        # Extract confidence level
+        if len(lines) > 1 and 'CONFIDENCE:' in lines[1]:
+            confidence = lines[1].split(':')[1].strip().lower()
+
+        # If confidence is low, use primary list as fallback
+        if confidence == 'low' and primary_list_name:
+            for lst in lists:
+                if lst['name'] == primary_list_name:
+                    return lst
+
+        # Find matching list
+        for lst in lists:
+            if lst['name'].lower() == selected_name.lower() or selected_name.lower() in lst['name'].lower():
+                return lst
+
+        # If no match, use primary or fall back to most recent
+        if primary_list_name:
+            for lst in lists:
+                if lst['name'] == primary_list_name:
+                    return lst
+        return max(lists, key=lambda x: x['date_updated'])
+
+    except Exception as e:
+        # Fall back to primary list or most recently updated list
+        if primary_list_name:
+            for lst in lists:
+                if lst['name'] == primary_list_name:
+                    return lst
+        return max(lists, key=lambda x: x['date_updated'])
+
+
+def smart_destination_detection(meeting_title, task_text="", context=""):
+    """
+    Automatically detect the appropriate ClickUp destination based on meeting title,
+    task text, and context. Dynamically discovers lists within client folders.
 
     Args:
         meeting_title: Title of the meeting
+        task_text: Text of the specific task (optional)
+        context: Context of the specific task (optional)
 
     Returns:
         dict: Suggested destination with space, folder, list info
     """
-    meeting_lower = meeting_title.lower()
+    # Combine all text to check for keywords
+    combined_text = f"{meeting_title} {task_text} {context}".lower()
 
-    # Get all lists
-    all_lists = get_workspace_list_index()
+    # Map client keywords to folders with primary list preferences
+    #
+    # HOW IT WORKS:
+    # - Keywords detect which CLIENT folder to use (e.g., "bevmo" → BevMo folder)
+    # - Claude AI automatically discovers ALL lists in that folder
+    # - Claude intelligently routes each task to the best list based on context
+    # - primary_list is used as fallback when Claude has low confidence
+    #
+    # WHEN YOU CREATE NEW PROJECTS:
+    # - Nothing to do! The system auto-discovers new lists
+    # - Claude will intelligently route tasks to the right project
+    # - Only update primary_list if you want to change the default
+    #
+    # ADDING NEW CLIENTS:
+    # - Add ONE keyword entry per client with their folder_id and primary_list
 
-    # Score each list based on keyword matches
-    best_match = None
-    best_score = 0
+    client_folder_mappings = {
+        # BevMo
+        'bevmo': {
+            'space_name': 'Clients',
+            'folder_name': 'BevMo',
+            'folder_id': '90117148971',
+            'primary_list': 'Holiday CTV 2025'  # Fallback for low-confidence cases
+        },
 
-    for list_info in all_lists:
-        score = 0
+        # Gopuff
+        'gopuff': {
+            'space_name': 'Clients',
+            'folder_name': 'Gopuff',
+            'folder_id': '90116990062',
+            'primary_list': 'NYE RR + WK'
+        },
+        'go puff': {
+            'space_name': 'Clients',
+            'folder_name': 'Gopuff',
+            'folder_id': '90116990062',
+            'primary_list': 'NYE RR + WK'
+        },
 
-        # Check folder name match
-        if list_info['folder_name']:
-            folder_lower = list_info['folder_name'].lower()
-            # Remove trailing spaces and special chars for matching
-            folder_clean = folder_lower.strip().rstrip('!')
+        # Mike's Hot Honey
+        "mike's hot honey": {
+            'space_name': 'Clients',
+            'folder_name': "Mike's Hot Honey",
+            'folder_id': '90117184414',
+            'primary_list': 'MMB1'
+        },
+        "mikes hot honey": {
+            'space_name': 'Clients',
+            'folder_name': "Mike's Hot Honey",
+            'folder_id': '90117184414',
+            'primary_list': 'MMB1'
+        },
 
-            if folder_clean in meeting_lower or meeting_lower in folder_clean:
-                score += 10
+        # Block / Bitkey
+        'bitkey': {
+            'space_name': 'Clients',
+            'folder_name': 'Block',
+            'folder_id': '90116199326',
+            'primary_list': 'Bitkey & Natalie Brunell'
+        },
+        'bit key': {
+            'space_name': 'Clients',
+            'folder_name': 'Block',
+            'folder_id': '90116199326',
+            'primary_list': 'Bitkey & Natalie Brunell'
+        },
+        'block': {
+            'space_name': 'Clients',
+            'folder_name': 'Block',
+            'folder_id': '90116199326',
+            'primary_list': 'Bitkey & Natalie Brunell'
+        },
 
-            # Check for partial word matches
-            folder_words = folder_clean.split()
-            for word in folder_words:
-                if len(word) > 3 and word in meeting_lower:
-                    score += 5
+        # Nysonian
+        'nysonian': {
+            'space_name': 'Clients',
+            'folder_name': 'Nysonian',
+            'folder_id': '90117033131',
+            'primary_list': 'NOBL Q4'
+        },
+        'nobl': {
+            'space_name': 'Clients',
+            'folder_name': 'Nysonian',
+            'folder_id': '90117033131',
+            'primary_list': 'NOBL Q4'
+        },
+    }
 
-        # Check list name match (for specific campaigns/projects)
-        list_lower = list_info['list_name'].lower()
-        list_clean = list_lower.strip()
+    # Check for keyword matches
+    for keyword, folder_info in client_folder_mappings.items():
+        if keyword in combined_text:
+            # Found a client match - now dynamically get lists and select best one
+            api_token = os.getenv('CLICKUP_API_TOKEN')
+            if not api_token:
+                print("Warning: CLICKUP_API_TOKEN not set, cannot fetch lists dynamically")
+                return {
+                    'space_name': 'Clients',
+                    'folder_name': 'Gut Feeling',
+                    'list_name': 'Operations',
+                    'list_id': '901104934665'
+                }
 
-        # Check for specific campaign/project keywords in list name
-        # These get higher priority than generic lists
-        is_generic = list_clean in ['triage', 'admin', 'templates']
+            # Get all lists in this folder
+            lists = get_folder_lists(folder_info['folder_id'], api_token)
 
-        if not is_generic:
-            list_words = list_clean.split()
-            for word in list_words:
-                if len(word) > 2 and word in meeting_lower:
-                    # Higher score for specific campaign lists
-                    score += 7
+            if not lists:
+                print(f"Warning: No lists found in folder {folder_info['folder_name']}")
+                return {
+                    'space_name': 'Clients',
+                    'folder_name': 'Gut Feeling',
+                    'list_name': 'Operations',
+                    'list_id': '901104934665'
+                }
 
-        # Penalize generic lists (Triage, Admin) unless no better match
-        if is_generic and score > 0:
-            score -= 2
+            # Use Claude to intelligently select the best list
+            # Pass primary_list as fallback for low-confidence cases
+            primary_list_name = folder_info.get('primary_list')
+            best_list = select_best_list_for_task(
+                lists,
+                task_text,
+                context,
+                meeting_title,
+                primary_list_name
+            )
 
-        if score > best_score:
-            best_score = score
-            best_match = list_info
-
-    # If we found a good match (score > 5), use it
-    if best_match and best_score > 5:
-        return {
-            'space_name': best_match['space_name'],
-            'folder_name': best_match['folder_name'],
-            'list_name': best_match['list_name'],
-            'list_id': best_match['list_id']
-        }
+            return {
+                'space_name': folder_info['space_name'],
+                'folder_name': folder_info['folder_name'],
+                'list_name': best_list['name'],
+                'list_id': best_list['id']
+            }
 
     # Default fallback - Operations list
     return {
@@ -1027,7 +1394,7 @@ def get_clickup_destination():
     print("  List: Holiday CTV 2025")
     print("  List ID: 901112154120\n")
 
-    response = input("Use this destination? (y/n): ").strip().lower()
+    response = get_user_input("Use this destination? (y/n): ", 'y').lower()
 
     if response == 'y':
         return {
@@ -1038,10 +1405,10 @@ def get_clickup_destination():
         }
     else:
         print("\nEnter custom destination:")
-        list_id = input("List ID (or press Enter to search by name): ").strip()
+        list_id = get_user_input("List ID (or press Enter to search by name): ", '')
 
         if not list_id:
-            list_name = input("List name to search for: ").strip()
+            list_name = get_user_input("List name to search for: ", '')
             return {
                 'space_name': None,
                 'folder_name': None,
@@ -1081,7 +1448,7 @@ def preview_all_meetings_for_approval(meetings_data):
 
     # Ask user which meetings to process
     print("=" * 60)
-    response = input("\nProcess ALL meetings? (y/n/select): ").strip().lower()
+    response = get_user_input("\nProcess ALL meetings? (y/n/select): ", 'y').lower()
 
     if response == 'y':
         return list(range(len(meetings_data)))  # All meetings
@@ -1090,7 +1457,7 @@ def preview_all_meetings_for_approval(meetings_data):
     elif response == 'select':
         # Let user select specific meetings
         print("\nEnter meeting numbers to process (comma-separated, e.g., 1,3,4):")
-        selection = input("Meetings to process: ").strip()
+        selection = get_user_input("Meetings to process: ", '')
         try:
             indices = [int(x.strip()) - 1 for x in selection.split(',')]
             # Validate indices
@@ -1138,111 +1505,171 @@ def preview_clickup_tasks(action_items, meeting_title, destination=None, claude_
         return False
 
     for i, item in enumerate(action_items, 1):
-        print(f"Task {i}:")
-        print(f"  Name: {item['task'][:80]}{'...' if len(item['task']) > 80 else ''}")
-        print(f"  Action Item: {item['task']}")
+        print(f"\nTask {i}:")
+        print(f"  Name: {item['task']}")
 
-        # Build full description with context
-        description_parts = [f"**Action Item:** {item['task']}", ""]
-        if item.get('context'):
-            description_parts.append("**Context from Meeting:**")
-            description_parts.append(item['context'])
-            description_parts.append("")
-        description_parts.append(f"**Source:** {meeting_title}")
-
-        full_description = "\n".join(description_parts)
-
-        print(f"\n  Full Description (for ClickUp):")
-        print("  " + "-" * 58)
-        for line in full_description.split('\n'):
-            print(f"  {line}")
-        print("  " + "-" * 58)
+        # Show destination for this task
+        task_dest = item.get('destination', destination)
+        if task_dest:
+            print(f"  Destination: {task_dest['space_name']} → {task_dest['folder_name']} → {task_dest['list_name']}")
 
         # Show who will actually be assigned (resolve through ASSIGNEE_MAP)
         mentioned_assignee = item.get('assignee')
         if mentioned_assignee:
             resolved_email = resolve_assignee_email(mentioned_assignee)
             if resolved_email:
-                print(f"\n  Assignee: {mentioned_assignee} ({resolved_email})")
+                print(f"  Assignee: {mentioned_assignee} ({resolved_email})")
             else:
                 # Not in map, will use default
                 default_email = os.getenv('DEFAULT_ASSIGNEE', 'unassigned')
-                print(f"\n  Assignee: {default_email} (default, {mentioned_assignee} not in team map)")
+                print(f"  Assignee: {default_email} (default, {mentioned_assignee} not in team map)")
         else:
             default_email = os.getenv('DEFAULT_ASSIGNEE', 'unassigned')
-            print(f"\n  Assignee: {default_email} (default)")
-        print(f"  Priority: {item.get('priority', 'normal')}")
+            print(f"  Assignee: {default_email} (default)")
+
+        print(f"  Priority: {item.get('priority') or 'None'}")
 
         # Show due date if found
         if item.get('due_date'):
             due_date = item['due_date']
-            print(f"  Due Date: {due_date['date_string']} (timestamp: {due_date['due_date_ms']})")
+            print(f"  Due Date: {due_date['date_string']}")
         else:
-            print(f"  Due Date: (none detected)")
+            print(f"  Due Date: None")
 
-        print(f"  Tags: ['meeting-action-item', 'bevmo']")
-        print("=" * 60)
+        # Generate tags dynamically based on task destination
+        task_tags = ['meeting-action-item']
+        task_dest = item.get('destination', destination)
+        folder_name = task_dest.get('folder_name', '').lower()
 
-    # Ask for confirmation or auto-confirm in Claude mode
+        # Map folder names to tag names
+        folder_to_tag = {
+            'bevmo': 'bevmo',
+            'gopuff': 'gopuff',
+            "mike's hot honey": 'mikes-hot-honey',
+            'block': 'bitkey',
+            'nysonian': 'nysonian',
+            'gut feeling': 'operations'
+        }
+
+        # Add client-specific tag based on folder
+        for folder_key, tag_name in folder_to_tag.items():
+            if folder_key in folder_name:
+                task_tags.append(tag_name)
+                break
+
+        print(f"  Tags: {task_tags}")
+        print()
+
+    # Ask for confirmation - ALWAYS require manual approval
     print("\n" + "=" * 60)
     print(f"TOTAL: {len(action_items)} tasks ready to create")
     print("=" * 60)
 
-    if claude_mode:
-        # In claude mode, expect TASK_CONFIRMATION environment variable
-        confirmation = os.environ.get('TASK_CONFIRMATION', '').strip().lower()
-        if confirmation == 'y' or confirmation == 'yes':
-            print("\n🤖 CLAUDE MODE: Task creation confirmed")
-            return True
-        else:
-            print("\n🤖 CLAUDE MODE: No TASK_CONFIRMATION, skipping task creation")
-            return False
-
-    response = input("\nCreate these tasks in ClickUp? (y/n): ").strip().lower()
+    # Always ask for confirmation, no auto-approval
+    response = get_user_input("\nCreate these tasks in ClickUp? (y/n): ", 'y').lower()
     return response == 'y'
 
 
-def send_drew_notification(meeting_title, task_count, created_task_ids):
+def send_drew_notification(meetings_processed):
     """
-    Send Drew a notification by creating a summary task in ClickUp.
+    Send Drew a detailed notification by creating a summary task in ClickUp.
 
     Args:
-        meeting_title: Title of the meeting that was processed
-        task_count: Number of tasks created
-        created_task_ids: List of task IDs that were created
+        meetings_processed: List of dicts with meeting info:
+            {
+                'meeting_title': str,
+                'tasks_created': list of dicts with 'name', 'assignee', 'priority', 'destination'
+            }
 
     Returns:
         dict: Notification task details for Claude Code to create
     """
     print("\nPreparing notification task for Drew...")
 
-    # Extract meeting name from title (remove quotes and date)
-    # Examples:
-    #   "BevMo Recurring StandUp" Oct 17, 2025 -> BevMo Recurring StandUp
-    #   Notes: "Gopuff NYE Team Sync" Oct 17, 2025 -> Gopuff NYE Team Sync
+    from datetime import datetime
     import re
-    meeting_name_match = re.search(r'"([^"]+)"', meeting_title)
-    if meeting_name_match:
-        meeting_name = meeting_name_match.group(1)
+
+    # Calculate totals
+    total_meetings = len(meetings_processed)
+    total_tasks = sum(len(m['tasks_created']) for m in meetings_processed)
+
+    # Generate title
+    if total_meetings == 1:
+        meeting_title = meetings_processed[0]['meeting_title']
+        meeting_name_match = re.search(r'"([^"]+)"', meeting_title)
+        meeting_name = meeting_name_match.group(1) if meeting_name_match else meeting_title
+        title = f"Meeting Processing: {meeting_name}, {total_tasks} tasks created"
     else:
-        # Fallback: use the whole title
-        meeting_name = meeting_title
+        title = f"Meeting Processing: {total_meetings} meetings, {total_tasks} tasks created"
 
-    # Create a summary notification task
+    # Build detailed description
+    description_parts = [
+        "Meeting Processing Summary\n",
+        f"Date: {datetime.now().strftime('%B %d, %Y')}",
+        f"Meetings Processed: {total_meetings}",
+        f"Total Tasks Created: {total_tasks}\n"
+    ]
+
+    # Add details for each meeting
+    for i, meeting in enumerate(meetings_processed, 1):
+        meeting_title = meeting['meeting_title']
+        meeting_name_match = re.search(r'"([^"]+)"', meeting_title)
+        meeting_name = meeting_name_match.group(1) if meeting_name_match else meeting_title
+
+        # Extract date from meeting title
+        date_match = re.search(r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d+,\s+\d{4}', meeting_title)
+        date_str = f" ({date_match.group(0)})" if date_match else ""
+
+        description_parts.append(f"Meeting {i}: \"{meeting_name}\"{date_str}\n")
+
+        tasks = meeting['tasks_created']
+        description_parts.append(f"Tasks Created: {len(tasks)}")
+
+        # Group tasks by destination (project)
+        tasks_by_project = {}
+        for task in tasks:
+            dest_key = f"{task.get('folder_name', 'Unknown')} → {task.get('list_name', 'Unknown')}"
+            if dest_key not in tasks_by_project:
+                tasks_by_project[dest_key] = []
+            tasks_by_project[dest_key].append(task)
+
+        if len(tasks_by_project) > 1:
+            description_parts[-1] += f" (across {len(tasks_by_project)} projects)"
+
+        description_parts.append("")
+
+        # List tasks grouped by project
+        for dest_key, dest_tasks in tasks_by_project.items():
+            description_parts.append(f"{dest_key}:\n")
+
+            for task in dest_tasks:
+                task_name = task['name']
+                assignee_name = task.get('assignee_name', '')
+                priority = task.get('priority', '')
+
+                # Build task line
+                task_line = f"- {task_name}"
+                if assignee_name:
+                    task_line += f" ({assignee_name})"
+                if priority and priority != 'None':
+                    priority_map = {'1': 'URGENT', '2': 'HIGH', '3': 'NORMAL', '4': 'LOW'}
+                    priority_text = priority_map.get(str(priority), str(priority).upper())
+                    task_line += f" - {priority_text} priority"
+
+                description_parts.append(task_line)
+
+            description_parts.append("")
+
+    # Add footer
+    description_parts.append("🤖 Automated by Claude Code meeting processor")
+
+    # Create notification task
     notification_task = {
-        'name': f'✓ Automated {task_count} tasks from {meeting_name}',
-        'markdown_description': f'''**gutAutomate successfully processed meeting notes!**
-
-**Meeting:** {meeting_title}
-**Tasks Created:** {task_count}
-**Timestamp:** {__import__('datetime').datetime.now().strftime('%B %d, %Y at %I:%M %p')}
-
-gutAutomate automatically extracted action items from your Gemini meeting notes and created ClickUp tasks with full context.
-
-All tasks have been assigned with due dates and priority levels based on the meeting discussion.''',
+        'name': title,
+        'markdown_description': '\n'.join(description_parts),
         'assignees': ['drew@gutfeeling.agency'],
-        'tags': ['gutAutomate', 'automation', 'meeting-notes'],
-        'priority': 'low',  # Low priority since it's just a notification
+        'tags': ['automation-summary', 'meeting-processed'],
+        'priority': 'normal',
         'list_id': '901112235176'  # Automation Summaries list
     }
 
@@ -1279,7 +1706,7 @@ def get_clickup_api_token():
         print("  2. Create .env file with: CLICKUP_API_TOKEN=your_token")
         print("  3. Enter it now (will be used for this session only)")
         print()
-        token = input("Enter ClickUp API token (or press Enter to skip): ").strip()
+        token = get_user_input("Enter ClickUp API token (or press Enter to skip): ", '')
 
     return token if token else None
 
@@ -1287,7 +1714,7 @@ def get_clickup_api_token():
 # Cache for email to user ID mapping (to avoid repeated API calls)
 _email_to_id_cache = {}
 
-def resolve_email_to_clickup_id(email, api_token, workspace_id='9011049981', debug=False):
+def resolve_email_to_clickup_id(email, api_token, workspace_id='2538614'):
     """
     Convert email address to ClickUp user ID by looking up workspace members.
     Caches results to avoid repeated API calls.
@@ -1296,55 +1723,167 @@ def resolve_email_to_clickup_id(email, api_token, workspace_id='9011049981', deb
         email: Email address to resolve
         api_token: ClickUp API token
         workspace_id: ClickUp workspace/team ID
-        debug: Enable debug logging
 
     Returns:
         int: ClickUp user ID or None if not found
     """
-    if debug:
-        print(f"  [DEBUG] Resolving email: {email}")
-
     # Check cache first
     if email in _email_to_id_cache:
-        if debug:
-            print(f"  [DEBUG] Found in cache: {_email_to_id_cache[email]}")
         return _email_to_id_cache[email]
 
     # Fetch workspace members if not cached
     if not _email_to_id_cache:
-        if debug:
-            print(f"  [DEBUG] Cache empty, fetching workspace members...")
         try:
-            url = f"https://api.clickup.com/api/v2/team/{workspace_id}/user"
+            url = f"https://api.clickup.com/api/v2/team"
             headers = {'Authorization': api_token}
             response = requests.get(url, headers=headers)
             response.raise_for_status()
 
-            members = response.json().get('members', [])
-            if debug:
-                print(f"  [DEBUG] Found {len(members)} members in workspace")
+            teams = response.json().get('teams', [])
+            members = teams[0].get('members', []) if teams else []
             for member in members:
                 user = member.get('user', {})
                 user_email = user.get('email', '')
                 user_id = user.get('id')
                 if user_email and user_id:
                     _email_to_id_cache[user_email.lower()] = user_id
-                    if debug:
-                        print(f"  [DEBUG] Cached: {user_email} -> {user_id}")
 
         except Exception as e:
             print(f"Warning: Could not fetch workspace members: {e}")
             return None
 
     # Look up in cache
-    result = _email_to_id_cache.get(email.lower())
-    if debug:
-        if result:
-            print(f"  [DEBUG] Resolved {email} -> {result}")
+    return _email_to_id_cache.get(email.lower())
+
+
+def get_tasks_from_list(list_id, api_token):
+    """
+    Fetch all existing tasks from a ClickUp list.
+
+    Args:
+        list_id: ClickUp list ID
+        api_token: ClickUp API token
+
+    Returns:
+        List of task dictionaries or empty list if failed
+    """
+    url = f"https://api.clickup.com/api/v2/list/{list_id}/task"
+
+    headers = {
+        'Authorization': api_token,
+        'Content-Type': 'application/json'
+    }
+
+    params = {
+        'include_closed': False,  # Don't include closed tasks
+        'subtasks': False  # Don't include subtasks
+    }
+
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            return data.get('tasks', [])
         else:
-            print(f"  [DEBUG] Email not found in cache: {email}")
-            print(f"  [DEBUG] Available emails: {list(_email_to_id_cache.keys())[:5]}...")
-    return result
+            print(f"⚠️  Failed to fetch tasks from list: {response.status_code}")
+            return []
+    except Exception as e:
+        print(f"⚠️  Error fetching tasks: {e}")
+        return []
+
+
+def update_clickup_task(task_id, updates, api_token):
+    """
+    Update an existing ClickUp task.
+
+    Args:
+        task_id: ClickUp task ID
+        updates: Dict with fields to update (name, description, due_date, assignees, etc.)
+        api_token: ClickUp API token
+
+    Returns:
+        dict: API response or None if failed
+    """
+    url = f"https://api.clickup.com/api/v2/task/{task_id}"
+
+    headers = {
+        'Authorization': api_token,
+        'Content-Type': 'application/json'
+    }
+
+    payload = {}
+
+    # Add fields to update
+    if 'name' in updates:
+        payload['name'] = updates['name']
+
+    if 'markdown_description' in updates:
+        payload['markdown_description'] = updates['markdown_description']
+
+    if 'due_date' in updates:
+        payload['due_date'] = updates['due_date']
+
+    if 'assignees' in updates:
+        # Handle assignees
+        assignee_ids = []
+        for assignee in updates['assignees']:
+            if isinstance(assignee, dict):
+                assignee_ids.append(assignee.get('id'))
+            else:
+                # It's an email, resolve it
+                user_id = resolve_email_to_clickup_id(assignee, api_token)
+                if user_id:
+                    assignee_ids.append(user_id)
+
+        if assignee_ids:
+            payload['assignees'] = {'add': assignee_ids}
+
+    try:
+        response = requests.put(url, headers=headers, json=payload)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"⚠️  Failed to update task: {response.status_code}")
+            print(f"    Response: {response.text}")
+            return None
+    except Exception as e:
+        print(f"⚠️  Error updating task: {e}")
+        return None
+
+
+def add_task_comment(task_id, comment_text, api_token):
+    """
+    Add a comment to a ClickUp task.
+
+    Args:
+        task_id: ClickUp task ID
+        comment_text: Comment text (supports markdown)
+        api_token: ClickUp API token
+
+    Returns:
+        dict: API response or None if failed
+    """
+    url = f"https://api.clickup.com/api/v2/task/{task_id}/comment"
+
+    headers = {
+        'Authorization': api_token,
+        'Content-Type': 'application/json'
+    }
+
+    payload = {
+        'comment_text': comment_text
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"⚠️  Failed to add comment: {response.status_code}")
+            return None
+    except Exception as e:
+        print(f"⚠️  Error adding comment: {e}")
+        return None
 
 
 def create_clickup_task_via_api(task_data, api_token):
@@ -1379,32 +1918,48 @@ def create_clickup_task_via_api(task_data, api_token):
     if task_data.get('assignees'):
         # Convert email addresses to ClickUp user IDs for REST API
         assignee_ids = []
-        # Enable debug for first email only to diagnose issues
-        first = True
         for email in task_data['assignees']:
-            user_id = resolve_email_to_clickup_id(email, api_token, debug=first)
-            first = False
+            user_id = resolve_email_to_clickup_id(email, api_token)
             if user_id:
                 assignee_ids.append(user_id)
-            else:
-                print(f"  ⚠️  Could not resolve email to user ID: {email}")
 
         if assignee_ids:
             payload['assignees'] = assignee_ids
-            print(f"  ✓ Assignees: {assignee_ids}")
-        else:
-            print(f"  ⚠️  No valid assignee IDs found for emails: {task_data.get('assignees')}")
     if task_data.get('priority'):
         # Convert priority names to ClickUp values
         priority_map = {'urgent': 1, 'high': 2, 'normal': 3, 'low': 4}
-        payload['priority'] = priority_map.get(task_data['priority'], 3)
+        if isinstance(task_data['priority'], str):
+            payload['priority'] = priority_map.get(task_data['priority'].lower(), 3)
+        else:
+            payload['priority'] = task_data['priority']
+
     if task_data.get('due_date'):
-        payload['due_date'] = int(task_data['due_date'])
+        # Ensure due_date is an integer timestamp
+        due_date = task_data['due_date']
+        if isinstance(due_date, str):
+            payload['due_date'] = int(due_date)
+        else:
+            payload['due_date'] = due_date
 
     try:
         response = requests.post(url, headers=headers, json=payload)
         response.raise_for_status()
-        return response.json()
+        result = response.json()
+
+        # Verify due date was set correctly
+        if task_data.get('due_date') and not result.get('due_date'):
+            print(f"⚠️  Warning: Due date not set by API, retrying...")
+            # Update the task with due date
+            task_id = result.get('id')
+            if task_id:
+                update_url = f"https://api.clickup.com/api/v2/task/{task_id}"
+                update_payload = {'due_date': payload['due_date']}
+                update_response = requests.put(update_url, headers=headers, json=update_payload)
+                if update_response.status_code == 200:
+                    print(f"✓ Due date updated successfully")
+                    result = update_response.json()
+
+        return result
     except requests.exceptions.RequestException as e:
         print(f"Error creating task: {e}")
         if hasattr(e, 'response') and e.response is not None:
@@ -1436,18 +1991,6 @@ def create_clickup_tasks_via_mcp(action_items, destination, meeting_title, claud
     # Prepare tasks for bulk creation
     tasks_to_create = []
 
-    # Auto-detect meeting tags from title
-    meeting_tags = []
-    meeting_lower = meeting_title.lower()
-    if 'bevmo' in meeting_lower:
-        meeting_tags.append('bevmo')
-    elif 'total wine' in meeting_lower:
-        meeting_tags.append('total-wine')
-    elif 'vfx' in meeting_lower or 'visual effects' in meeting_lower:
-        meeting_tags.append('vfx')
-    # Add default tag
-    meeting_tags.append('meeting-action-item')
-
     for i, item in enumerate(action_items, 1):
         print(f"\nPreparing Task {i}/{len(action_items)}: {item['task'][:50]}...")
 
@@ -1457,9 +2000,10 @@ def create_clickup_tasks_via_mcp(action_items, destination, meeting_title, claud
         if mentioned_assignee:
             resolved_email = resolve_assignee_email(mentioned_assignee)
 
-        # Build the task description with markdown formatting
+        # Build the task description with markdown formatting (use original_task in description)
+        original_text = item.get('original_task', item['task'])
         description_parts = [
-            f"**Action Item:** {item['task']}",
+            f"**Action Item:** {original_text}",
             ""
         ]
 
@@ -1480,7 +2024,9 @@ def create_clickup_tasks_via_mcp(action_items, destination, meeting_title, claud
 
         # Condense task name: remove assignee name and extra words
         condensed_name = item['task']
-        original_name = condensed_name  # For debugging
+
+        # Remove Unicode private use area characters (like \ue907)
+        condensed_name = re.sub(r'[\ue000-\uf8ff]', '', condensed_name)
 
         # Remove assignee name from beginning (e.g., "Matt Rose will" -> "will")
         if item.get('assignee'):
@@ -1493,11 +2039,6 @@ def create_clickup_tasks_via_mcp(action_items, destination, meeting_title, claud
         # Capitalize first letter
         if condensed_name:
             condensed_name = condensed_name[0].upper() + condensed_name[1:]
-
-        # Log condensing if title changed
-        if condensed_name != original_name:
-            print(f"  ✂️  Condensed: '{original_name[:40]}...' → '{condensed_name[:40]}...'")
-
 
         # Intelligently truncate if too long (at word/phrase boundaries)
         if len(condensed_name) > 80:
@@ -1522,11 +2063,40 @@ def create_clickup_tasks_via_mcp(action_items, destination, meeting_title, claud
                 else:
                     condensed_name = condensed_name[:80]
 
+        # Use per-task destination if available, otherwise use meeting-level destination
+        task_destination = item.get('destination', destination)
+        task_list_id = task_destination.get('list_id', destination['list_id'])
+
+        # Show if task has different destination than meeting default
+        if task_destination != destination:
+            print(f"    → Destination: {task_destination['folder_name']} / {task_destination['list_name']}")
+
+        # Generate tags dynamically based on task destination
+        task_tags = ['meeting-action-item']
+        folder_name = task_destination.get('folder_name', '').lower()
+
+        # Map folder names to tag names
+        folder_to_tag = {
+            'bevmo': 'bevmo',
+            'gopuff': 'gopuff',
+            "mike's hot honey": 'mikes-hot-honey',
+            'block': 'bitkey',
+            'nysonian': 'nysonian',
+            'gut feeling': 'operations'
+        }
+
+        # Add client-specific tag based on folder
+        for folder_key, tag_name in folder_to_tag.items():
+            if folder_key in folder_name:
+                task_tags.append(tag_name)
+                break
+
         # Build task object for ClickUp MCP
         task_obj = {
             'name': condensed_name,
             'markdown_description': full_description,
-            'tags': meeting_tags
+            'tags': task_tags,
+            'list_id': task_list_id  # Store per-task list_id
         }
 
         # Use resolved email from earlier, or fall back to default
@@ -1559,8 +2129,7 @@ def create_clickup_tasks_via_mcp(action_items, destination, meeting_title, claud
         tasks_to_create.append(task_obj)
 
     print(f"\n✓ Prepared {len(tasks_to_create)} tasks for ClickUp creation")
-    print(f"  List ID: {destination['list_id']}")
-    print(f"  Tags: {', '.join(meeting_tags)}")
+    print(f"  List IDs: Multiple (per-task routing)")
 
     # If in claude mode, actually create the tasks via MCP
     if claude_mode:
@@ -1643,18 +2212,16 @@ def prompt_for_meeting_approval(emails, claude_mode=False):
     print("  • Enter 'none' or 'skip' to skip all")
     print("  • Enter numbers (comma-separated, e.g., '1,2' or '2')")
 
-    if claude_mode:
-        # In claude mode, expect MEETING_SELECTION environment variable
-        import os
-        selection = os.environ.get('MEETING_SELECTION', '')
-        if not selection:
-            print("\n🤖 CLAUDE MODE: No MEETING_SELECTION environment variable found.")
-            print("   Expected format: 'all' or '1,2' or '2'")
-            return []
-        print(f"\n🤖 CLAUDE MODE: Using MEETING_SELECTION={selection}")
+    # Check for MEETING_SELECTION environment variable (works in both modes)
+    selection = os.environ.get('MEETING_SELECTION', '')
+
+    if selection:
+        # Using environment variable
+        print(f"\n✓ Using MEETING_SELECTION={selection}")
         response = selection.strip().lower()
     else:
-        response = input("\nYour choice: ").strip().lower()
+        # Interactive mode
+        response = get_user_input("\nYour choice: ", 'all').lower()
 
     # Handle 'all' or 'y'
     if response in ['all', 'y', 'yes']:
@@ -1687,34 +2254,18 @@ def prompt_for_meeting_approval(emails, claude_mode=False):
             return []
 
 
-if __name__ == '__main__':
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(
-        description='gutAutomate - Automate ClickUp task creation from Gemini meeting notes',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python3 gutAutomate.py           # Standalone mode (prepare tasks only)
-  python3 gutAutomate.py claude    # Claude mode (create tasks via MCP)
-        """
-    )
-    parser.add_argument(
-        'mode',
-        nargs='?',
-        choices=['claude'],
-        default=None,
-        help='Run mode: omit for standalone, "claude" for Claude Code integration'
-    )
-    args = parser.parse_args()
+def main(mode='auto'):
+    """
+    Main entry point for gutAutomate.
 
-    # Determine if Claude mode is enabled
-    claude_mode = args.mode == 'claude'
+    Always runs in automatic mode using REST API.
+    Claude consultation available for low-confidence decisions.
 
-    if claude_mode:
-        print("🤖 Running in CLAUDE MODE - Tasks will be created in ClickUp")
-    else:
-        print("📋 Running in STANDALONE MODE - Tasks will be prepared only")
-
+    Args:
+        mode: Deprecated parameter (kept for backward compatibility)
+    """
+    print("🚀 gutAutomate - Intelligent Meeting Note Processing")
+    print("   Using: REST API (direct) + Optional Claude consultation")
     print()
 
     # Complete workflow: Find meeting notes, fetch content, parse action items, preview tasks
@@ -1724,17 +2275,12 @@ Examples:
         print("\nNo meeting notes emails found to process.")
     else:
         # Step 1: Show all meetings and get approval BEFORE fetching content
-        approved_indices = prompt_for_meeting_approval(emails, claude_mode=claude_mode)
+        approved_indices = prompt_for_meeting_approval(emails)
 
         if not approved_indices:
             print("\n✗ No meetings approved for processing.")
         else:
             print(f"\n✓ {len(approved_indices)} meeting(s) approved")
-
-            # Mark approved emails as read
-            approved_email_ids = [emails[idx]['email_id'] for idx in approved_indices]
-            print(f"\nMarking {len(approved_email_ids)} email(s) as read...")
-            mark_emails_as_read(approved_email_ids)
 
             print(f"\n{'='*60}")
             print(f"Fetching content for approved meetings...")
@@ -1753,6 +2299,19 @@ Examples:
 
                     # Extract document ID for copying
                     doc_id = extract_document_id(email['meeting_notes_link'])
+
+                    # Check if this meeting has already been processed
+                    from gut_automate.duplicate_detection import check_meeting_processed
+                    already_processed = check_meeting_processed(
+                        doc_id=doc_id,
+                        email_id=email['email_id']
+                    )
+
+                    if already_processed:
+                        print(f"⏭️  SKIPPED: This meeting was already processed on {already_processed.get('processed_date')}")
+                        print(f"   {len(already_processed.get('tasks_created', []))} tasks were created")
+                        print(f"   To re-process, delete this meeting from data/processed_meetings.json\n")
+                        continue
 
                     # Copy document to shared drive
                     if doc_id:
@@ -1773,6 +2332,7 @@ Examples:
                         # Store meeting data
                         meetings_data.append({
                             'email_id': email['email_id'],
+                            'doc_id': doc_id,
                             'meeting_title': meeting_title,
                             'action_items': action_items,
                             'destination': destination
@@ -1792,6 +2352,9 @@ Examples:
                     print(f"  Destination: {meeting['destination']['space_name']} → {meeting['destination']['folder_name']} → {meeting['destination']['list_name']}")
                     print()
 
+                # Track all meetings processed for summary notification
+                meetings_for_notification = []
+
                 # Step 4: Process each approved meeting
                 for idx, meeting in enumerate(meetings_data):
                     print(f"\n{'='*60}")
@@ -1802,119 +2365,277 @@ Examples:
                     should_create = preview_clickup_tasks(
                         meeting['action_items'],
                         meeting['meeting_title'],
-                        meeting['destination'],
-                        claude_mode=claude_mode
+                        meeting['destination']
                     )
 
                     if should_create:
-                        print("\n✓ User confirmed - Preparing tasks for creation...")
+                        print("\n✓ User confirmed - Creating tasks via ClickUp REST API...")
 
-                        # Prepare tasks for ClickUp (use MCP-aware version)
+                        # Prepare tasks for ClickUp
                         result = create_clickup_tasks_via_mcp(
                             meeting['action_items'],
                             meeting['destination'],
                             meeting['meeting_title'],
-                            claude_mode=claude_mode
+                            claude_mode=False  # Always use REST API format
                         )
 
                         if result.get('ready'):
                             print(f"\n✓ Tasks prepared successfully!")
                             print(f"  {result['count']} tasks ready to be created in ClickUp")
 
-                            # Prepare notification to Drew
-                            notification = send_drew_notification(
-                                meeting['meeting_title'],
-                                result['count'],
-                                []
-                            )
+                            # Get API token
+                            api_token = get_clickup_api_token()
 
-                            if claude_mode:
-                                import json
-
-                                print(f"\n🤖 CLAUDE MODE: Outputting JSON for Claude Code to process")
-
-                                # Output JSON that Claude Code can parse
-                                output_data = {
-                                    'status': 'ready_for_mcp',
-                                    'meeting_title': meeting['meeting_title'],
-                                    'list_id': meeting['destination']['list_id'],
-                                    'destination': meeting['destination'],
-                                    'task_count': result['count'],
-                                    'prepared_tasks': result['prepared_tasks'],
-                                    'notification': {
-                                        'list_id': '901112235176',  # Automation Summaries
-                                        'name': notification['name'],
-                                        'markdown_description': notification['markdown_description'],
-                                        'assignees': notification.get('assignees', []),
-                                        'tags': notification.get('tags', [])
-                                    }
-                                }
-
-                                print("\n" + "=" * 60)
-                                print("JSON_OUTPUT_START")
-                                print(json.dumps(output_data, indent=2, default=str))
-                                print("JSON_OUTPUT_END")
-                                print("=" * 60)
+                            if not api_token:
+                                print(f"\n⚠️  Skipping task creation (no API token)")
+                                print(f"\nTo create these tasks later:")
+                                print(f"  1. Get API token from https://app.clickup.com/settings/apps")
+                                print(f"  2. Run: export CLICKUP_API_TOKEN='your_token'")
+                                print(f"  3. Re-run this script")
                             else:
-                                print(f"\n📋 STANDALONE MODE: Creating tasks via ClickUp API...")
+                                # Import duplicate detection functions
+                                from gut_automate.duplicate_detection import (
+                                    find_similar_tasks, compare_tasks,
+                                    merge_descriptions, create_update_comment
+                                )
 
-                                # Get API token
-                                api_token = get_clickup_api_token()
+                                # Group tasks by list_id to fetch existing tasks efficiently
+                                tasks_by_list = {}
+                                for task_data in result['prepared_tasks']:
+                                    # Use per-task list_id if available, otherwise use meeting destination
+                                    if 'list_id' not in task_data:
+                                        task_data['list_id'] = meeting['destination']['list_id']
 
-                                if not api_token:
-                                    print(f"\n⚠️  Skipping task creation (no API token)")
-                                    print(f"\nTo create these tasks later:")
-                                    print(f"  1. Get API token from https://app.clickup.com/settings/apps")
-                                    print(f"  2. Run: export CLICKUP_API_TOKEN='your_token'")
-                                    print(f"  3. Re-run this script")
-                                else:
-                                    # Create tasks via API
-                                    created_count = 0
-                                    failed_count = 0
-                                    task_urls = []
+                                    list_id = task_data['list_id']
+                                    if list_id not in tasks_by_list:
+                                        tasks_by_list[list_id] = []
+                                    tasks_by_list[list_id].append(task_data)
 
-                                    for task_data in result['prepared_tasks']:
-                                        # Add list_id to task_data
-                                        task_data['list_id'] = destination['list_id']
+                                # Fetch existing tasks for each list
+                                print(f"\n🔍 Checking for duplicate tasks across {len(tasks_by_list)} list(s)...")
+                                existing_tasks_by_list = {}
+                                for list_id in tasks_by_list.keys():
+                                    existing_tasks_by_list[list_id] = get_tasks_from_list(list_id, api_token)
+                                    print(f"   Found {len(existing_tasks_by_list[list_id])} existing tasks in list {list_id}")
 
-                                        print(f"Creating: {task_data['name'][:50]}...", end=" ")
+                                # Create tasks via API with duplicate detection
+                                created_count = 0
+                                updated_count = 0
+                                skipped_count = 0
+                                failed_count = 0
+                                task_urls = []
+                                tasks_for_notification = []  # Track task details for notification
 
-                                        response = create_clickup_task_via_api(task_data, api_token)
+                                for task_data in result['prepared_tasks']:
+                                    print(f"\n📝 Processing: {task_data['name'][:60]}...")
 
-                                        if response:
-                                            created_count += 1
-                                            task_urls.append(response.get('url'))
-                                            print("✓")
-                                        else:
-                                            failed_count += 1
-                                            print("✗")
+                                    # Get existing tasks for this task's list
+                                    existing_tasks = existing_tasks_by_list.get(task_data['list_id'], [])
 
-                                    # Create notification task
-                                    print(f"\nCreating notification...", end=" ")
-                                    notification['list_id'] = '901112235176'  # Automation Summaries
-                                    notif_response = create_clickup_task_via_api(notification, api_token)
+                                    # Check for duplicates
+                                    matches = find_similar_tasks(task_data, existing_tasks, threshold=0.85)
 
-                                    if notif_response:
+                                    if matches:
+                                        # Found potential duplicate
+                                        existing_task, similarity = matches[0]
+
+                                        # Compare to see what changed
+                                        changes = compare_tasks(task_data, existing_task)
+
+                                        # Prompt user for action
+                                        action = prompt_duplicate_action(
+                                            task_data, existing_task, similarity, changes
+                                        )
+
+                                        if action == 'skip':
+                                            print("   ⏭️  Skipped (duplicate)")
+                                            skipped_count += 1
+                                            continue
+
+                                        elif action == 'update':
+                                            print("   🔄 Updating existing task...", end=" ")
+
+                                            # Prepare updates
+                                            updates = {}
+
+                                            # Update due date if changed
+                                            if changes.get('due_date_changed'):
+                                                updates['due_date'] = changes['new_due_date']
+
+                                            # Update assignees if changed
+                                            if changes.get('assignee_changed'):
+                                                updates['assignees'] = task_data.get('assignees', [])
+
+                                            # Merge descriptions if different
+                                            if changes.get('description_different'):
+                                                merged_desc = merge_descriptions(
+                                                    changes['old_description'],
+                                                    changes['new_description']
+                                                )
+                                                updates['markdown_description'] = merged_desc
+
+                                            # Update the task
+                                            if updates:
+                                                update_response = update_clickup_task(
+                                                    existing_task['id'], updates, api_token
+                                                )
+
+                                                if update_response:
+                                                    # Add comment explaining the update
+                                                    comment_text = create_update_comment(meeting_title, changes)
+                                                    add_task_comment(existing_task['id'], comment_text, api_token)
+
+                                                    updated_count += 1
+                                                    task_url = existing_task.get('url', '')
+                                                    task_urls.append(task_url)
+                                                    print("✓")
+                                                else:
+                                                    failed_count += 1
+                                                    print("✗")
+                                            else:
+                                                print("(no changes needed)")
+                                                skipped_count += 1
+
+                                            continue
+
+                                    # No duplicate or user chose to create anyway
+                                    print("   ➕ Creating new task...", end=" ")
+                                    response = create_clickup_task_via_api(task_data, api_token)
+
+                                    if response:
+                                        created_count += 1
+                                        task_urls.append(response.get('url'))
+
+                                        # Collect task info for notification
+                                        # Extract assignee name from email
+                                        assignee_name = ''
+                                        assignees = task_data.get('assignees', [])
+                                        if assignees:
+                                            first_assignee = assignees[0]
+                                            if isinstance(first_assignee, str) and '@' in first_assignee:
+                                                # Extract name from email (e.g., drew@gutfeeling.agency -> Drew)
+                                                assignee_name = first_assignee.split('@')[0].title()
+
+                                        task_info = {
+                                            'name': task_data.get('name', ''),
+                                            'assignee_name': assignee_name,
+                                            'priority': task_data.get('priority'),
+                                            'folder_name': meeting['destination'].get('folder_name', 'Unknown'),
+                                            'list_name': meeting['destination'].get('list_name', 'Unknown')
+                                        }
+                                        tasks_for_notification.append(task_info)
                                         print("✓")
                                     else:
+                                        failed_count += 1
                                         print("✗")
 
-                                    # Summary
-                                    print(f"\n{'='*60}")
-                                    print(f"TASK CREATION COMPLETE")
-                                    print(f"{'='*60}")
-                                    print(f"✓ Created: {created_count}")
-                                    if failed_count > 0:
-                                        print(f"✗ Failed: {failed_count}")
+                                # Summary
+                                print(f"\n{'='*60}")
+                                print(f"TASK PROCESSING COMPLETE")
+                                print(f"{'='*60}")
+                                print(f"➕ Created: {created_count}")
+                                if updated_count > 0:
+                                    print(f"🔄 Updated: {updated_count}")
+                                if skipped_count > 0:
+                                    print(f"⏭️  Skipped: {skipped_count}")
+                                if failed_count > 0:
+                                    print(f"✗ Failed: {failed_count}")
 
-                                    if task_urls:
-                                        print(f"\nCreated tasks:")
-                                        for url in task_urls[:5]:  # Show first 5
-                                            if url:
-                                                print(f"  {url}")
-                                        if len(task_urls) > 5:
-                                            print(f"  ... and {len(task_urls) - 5} more")
+                                if task_urls:
+                                    print(f"\nProcessed tasks:")
+                                    for url in task_urls[:5]:  # Show first 5
+                                        if url:
+                                            print(f"  {url}")
+                                    if len(task_urls) > 5:
+                                        print(f"  ... and {len(task_urls) - 5} more")
+
+                                # Record this meeting as processed (processing history is source of truth)
+                                if created_count > 0 or updated_count > 0:
+                                    from gut_automate.duplicate_detection import record_processed_meeting
+                                    tasks_created_records = [
+                                        {
+                                            'task_id': url.split('/')[-1] if url else None,
+                                            'task_name': task_data.get('name', ''),
+                                            'list_id': meeting['destination']['list_id']
+                                        }
+                                        for task_data, url in zip(result['prepared_tasks'], task_urls)
+                                        if url
+                                    ]
+                                    record_processed_meeting(
+                                        doc_id=meeting.get('doc_id', ''),
+                                        meeting_title=meeting['meeting_title'],
+                                        email_id=meeting['email_id'],
+                                        tasks_created=tasks_created_records
+                                    )
+                                    print(f"\n✓ Recorded meeting as processed in history database")
+                                    print(f"   (Email left unread - you can mark it read when you're done with it)")
+
+                                    # Add this meeting to notification list
+                                    if tasks_for_notification:
+                                        meetings_for_notification.append({
+                                            'meeting_title': meeting['meeting_title'],
+                                            'tasks_created': tasks_for_notification
+                                        })
+                                else:
+                                    print(f"\n⚠️  No tasks created/updated - meeting NOT recorded as processed")
                         else:
                             print("\n✗ Failed to prepare tasks")
                     else:
                         print("\n✗ Task creation cancelled by user.")
+
+                # Create summary notification after all meetings processed
+                if meetings_for_notification:
+                    print(f"\n{'='*60}")
+                    print(f"Creating summary notification...")
+                    print(f"{'='*60}")
+
+                    notification = send_drew_notification(meetings_for_notification)
+                    notif_response = create_clickup_task_via_api(notification, api_token)
+
+                    if notif_response:
+                        print(f"✓ Summary notification created")
+                        print(f"  {notif_response.get('url', '')}")
+                    else:
+                        print(f"✗ Failed to create summary notification")
+
+    # Display API usage summary at the end
+    if API_USAGE['api_calls'] > 0:
+        print(f"\n{'='*60}")
+        print("API USAGE SUMMARY")
+        print(f"{'='*60}")
+        print(f"Total API Calls: {API_USAGE['api_calls']}")
+        print(f"Input Tokens: {API_USAGE['input_tokens']:,}")
+        print(f"Output Tokens: {API_USAGE['output_tokens']:,}")
+
+        # Calculate cost (Claude Sonnet 4.5: $3 per MTok input, $15 per MTok output)
+        input_cost = (API_USAGE['input_tokens'] / 1_000_000) * 3
+        output_cost = (API_USAGE['output_tokens'] / 1_000_000) * 15
+        total_cost = input_cost + output_cost
+
+        print(f"Estimated Cost: ${total_cost:.4f}")
+        print(f"  Input: ${input_cost:.4f}")
+        print(f"  Output: ${output_cost:.4f}")
+        print(f"{'='*60}")
+
+
+if __name__ == '__main__':
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description='gutAutomate - Automate ClickUp task creation from Gemini meeting notes',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python3 -m gut_automate.core               # Interactive mode (with approvals)
+  MEETING_SELECTION="all" python3 -m ...     # Auto-select all meetings (still requires approval)
+        """
+    )
+    # Keep mode argument for backward compatibility but ignore it
+    parser.add_argument(
+        'mode',
+        nargs='?',
+        default='auto',
+        help='Deprecated - kept for backward compatibility only'
+    )
+    args = parser.parse_args()
+
+    main()

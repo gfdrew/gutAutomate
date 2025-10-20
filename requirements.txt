@@ -1,0 +1,17 @@
+# Google API dependencies
+google-auth-oauthlib>=1.0.0
+google-auth-httplib2>=0.1.0
+google-api-python-client>=2.0.0
+
+# HTTP and API utilities
+requests>=2.25.0
+
+# Environment configuration
+python-dotenv>=0.19.0
+
+# Optional: Development dependencies
+# Uncomment these for development work
+# pytest>=7.0.0
+# mypy>=0.950
+# black>=22.0.0
+# flake8>=4.0.0
